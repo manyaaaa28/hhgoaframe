@@ -62,17 +62,37 @@ export async function shareToX({
 
     const res = await fetch("/api/upload", { method: "POST", body: form });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.cardUrl) throw new Error(data.error || "upload failed");
 
-    const tweet = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
-      caption
-    )}&url=${encodeURIComponent(data.cardUrl)}`;
+    if (res.ok && data.cardUrl) {
+      const tweet = intent(caption, data.cardUrl);
+      if (popup && !popup.closed) popup.location.href = tweet;
+      else window.open(tweet, "_blank");
+      return null;
+    }
 
+    /* No blob store configured (or the upload failed). Rather than dead-ending,
+       save the PNG and open the composer with the caption ready — the user just
+       drags the file in. A working share beats an error message. */
+    saveFile(dataUrl, filename);
+    const tweet = intent(caption);
     if (popup && !popup.closed) popup.location.href = tweet;
     else window.open(tweet, "_blank");
-    return null;
+    return "Image saved to your downloads — attach it to the tweet we just opened.";
   } catch {
     popup?.close();
-    return "Couldn't reach the server — download the image and attach it on X manually.";
+    return "Couldn't prepare the image. Download it and attach it on X manually.";
   }
+}
+
+function intent(caption: string, url?: string) {
+  const q = new URLSearchParams({ text: caption });
+  if (url) q.set("url", url);
+  return `https://twitter.com/intent/tweet?${q.toString()}`;
+}
+
+function saveFile(dataUrl: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  a.click();
 }
