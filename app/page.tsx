@@ -4,10 +4,14 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { nanoid } from "nanoid";
-import { layoutsForSize, LayoutTemplate, CANVAS_SIZE } from "@/lib/layouts";
+import { layoutsForSize, LayoutTemplate, CANVAS_SIZE, HH_FRAME_W, HH_FRAME_H } from "@/lib/layouts";
 import { fileToImage } from "@/lib/loadImage";
 import { GOA_STICKERS } from "@/lib/goaStickers";
-import type { EditorCanvasHandle, PhotoState, StickerInstance } from "@/components/EditorCanvas";
+import { shareToX as shareImageToX } from "@/lib/share";
+import { cascadeDrop, STICKER_SIZE_RATIO } from "@/lib/stickerDrop";
+import CameraSheet from "@/components/CameraSheet";
+import CropSheet from "@/components/CropSheet";
+import type { EditorCanvasHandle, PhotoState, StickerInstance, Stroke, Tool } from "@/components/EditorCanvas";
 
 const EditorCanvas = dynamic(() => import("@/components/EditorCanvas"), { ssr: false });
 
@@ -45,6 +49,15 @@ export default function Page() {
   const [busy, setBusy] = useState(false);
   const [exportedUrl, setExportedUrl] = useState<string | null>(null);
   const [displaySize, setDisplaySize] = useState(560);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [tool, setTool] = useState<Tool>("select");
+  const [panel, setPanel] = useState<"stickers" | "pen" | null>(null);
+  const [brush, setBrush] = useState({ color: "#cf3550", size: 18 });
+  const [railTool, setRailTool] = useState<RailTool>("move");
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [shareNote, setShareNote] = useState<string | null>(null);
+  const [original, setOriginal] = useState<HTMLImageElement | null>(null);
+  const [cropping, setCropping] = useState(false);
 
   const canvasRef = useRef<EditorCanvasHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,22 +70,45 @@ export default function Page() {
   const frameTheme = layout?.frameTheme ?? "classic";
   const isHH = frameTheme === "hacker-house";
 
+  /* Each step is a new screen. Without this the editor inherits the scroll
+     position from the step before, which on a phone drops you below the frame
+     entirely — it reads as "the frame is missing", and canvas taps land off
+     screen. */
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [step]);
+
   useEffect(() => {
     function onResize() {
       if (!containerRef.current) return;
-      const w = containerRef.current.clientWidth;
-      setDisplaySize(Math.min(w, 1060));
+      const box = containerRef.current;
+      const w = box.clientWidth - 8;
+      const h = box.clientHeight - 8;
+      if (w <= 0 || h <= 0) return;
+      // The editor never scrolls, so the frame is contain-fitted into whatever
+      // the shell leaves over. displaySize is the frame's long edge.
+      const fit = Math.min(w / CW, h / CH);
+      setDisplaySize(fit * Math.max(CW, CH));
     }
     onResize();
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [step]);
+    const ro = containerRef.current ? new ResizeObserver(onResize) : null;
+    if (ro && containerRef.current) ro.observe(containerRef.current);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      ro?.disconnect();
+    };
+  }, [step, CW, CH]);
 
   function pickTeamSize(n: 1 | 2 | 3) {
     setTeamSize(n);
     setNames(Array(n).fill(""));
     setStacks(Array(n).fill(""));
-    setStep(1);
+    // Every team size has exactly one frame now, so a picker with a single
+    // card is just an extra tap between the user and their photo.
+    const options = layoutsForSize(n);
+    if (options.length === 1) pickLayout(options[0]);
+    else setStep(1);
   }
 
   function pickLayout(l: LayoutTemplate) {
@@ -82,29 +118,45 @@ export default function Page() {
     setStep(2);
   }
 
+  /* Straight to the cropper: the on-frame window is small and nobody found the
+     drag-to-reposition, so framing happens once, large, before it lands. */
   const handleFile = useCallback(
     async (file: File) => {
       if (activeSlot === null || !layout) return;
       setBusy(true);
       try {
         const img = await fileToImage(file);
-        const slot = layout.slots[activeSlot];
-        const sw = slot.w * CW;
-        const sh = slot.h * CH;
-        const baseScale = Math.max(sw / img.width, sh / img.height);
-        setPhotos((prev) => {
-          const next = [...prev];
-          next[activeSlot] = { image: img, offsetX: 0, offsetY: 0, scale: baseScale, baseScale };
-          return next;
-        });
-      } catch (err) {
+        setOriginal(img);
+        setCropping(true);
+      } catch {
         alert("Couldn't read that photo. Try another one?");
       } finally {
         setBusy(false);
       }
     },
+    [activeSlot, layout]
+  );
+
+  /** Place an already-framed image into the active slot. */
+  const placeImage = useCallback(
+    (img: HTMLImageElement) => {
+      if (activeSlot === null || !layout) return;
+      const slot = layout.slots[activeSlot];
+      const baseScale = Math.max((slot.w * CW) / img.width, (slot.h * CH) / img.height);
+      setPhotos((prev) => {
+        const next = [...prev];
+        next[activeSlot] = { image: img, offsetX: 0, offsetY: 0, scale: baseScale, baseScale };
+        return next;
+      });
+    },
     [activeSlot, layout, CW, CH]
   );
+
+  /** Each slot has its own shape, so the cropper matches the one being filled. */
+  const slotAspect =
+    activeSlot !== null && layout
+      ? (layout.slots[activeSlot].w * CW) / (layout.slots[activeSlot].h * CH)
+      : 1;
 
   function updatePhotoDrag(index: number, offsetX: number, offsetY: number) {
     setPhotos((prev) => {
@@ -114,15 +166,32 @@ export default function Page() {
     });
   }
 
-  function setZoom(index: number, scale: number) {
-    setPhotos((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], scale };
-      return next;
-    });
+
+
+
+  /* The rail mixes modes (pen, eraser, move, stickers) with one-shot actions
+     (photo, crop, undo, delete). Both light up the button so the options bar
+     always explains what just happened. */
+  function runTool(id: RailTool) {
+    setRailTool(id);
+    if (id === "pen" || id === "eraser") {
+      setTool(id === "pen" ? "brush" : "eraser");
+      setSelectedStickerId(null);
+      return;
+    }
+    setTool("select");
+    if (id === "photo") fileInputRef.current?.click();
+    else if (id === "camera") setCameraOpen(true);
+    else if (id === "crop") setCropping(true);
+    else if (id === "undo") setStrokes((v) => v.slice(0, -1));
+    else if (id === "delete") {
+      if (selectedStickerId) removeSelectedSticker();
+      else {
+        setStickers([]);
+        setSelectedStickerId(null);
+      }
+    }
   }
-
-
 
   function removeSelectedSticker() {
     if (!selectedStickerId) return;
@@ -130,27 +199,57 @@ export default function Page() {
     setSelectedStickerId(null);
   }
 
-  /** Drops land where the pointer was; taps land in the middle of the frame. */
+  /* Delete/Backspace removes the selected sticker; Escape drops back to MOVE.
+     Pen and eraser stop the sticker layer listening, so without a way out it
+     looks like stickers have stopped responding entirely. */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const typing =
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement;
+      if (e.key === "Escape" && !typing) {
+        setTool("select");
+        setRailTool("move");
+        return;
+      }
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      if (!selectedStickerId) return;
+      e.preventDefault();
+      removeSelectedSticker();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  /** Drops land where the pointer was; taps fan out from the middle of the frame. */
   function addImageSticker(url: string, at?: { x: number; y: number }) {
     const img = new window.Image();
     img.onload = () => {
       const id = nanoid(6);
-      const targetPx = Math.min(450, CW * 0.25);
+      const targetPx = CW * STICKER_SIZE_RATIO;
       const scale = targetPx / Math.max(img.width, img.height, 1);
-      setStickers((prev) => [
-        ...prev,
-        {
-          id,
-          kind: "image" as const,
-          src: url,
-          imgEl: img,
-          x: at?.x ?? CW / 2,
-          y: at?.y ?? CH / 2,
-          scale,
-          rotation: 0,
-        },
-      ]);
+      setStickers((prev) => {
+        const spot = at ?? cascadeDrop(prev.length, CW / 2, CH / 2, CW);
+        return [
+          ...prev,
+          {
+            id,
+            kind: "image" as const,
+            src: url,
+            imgEl: img,
+            x: spot.x,
+            y: spot.y,
+            scale,
+            rotation: 0,
+          },
+        ];
+      });
       setSelectedStickerId(id);
+      // On a phone the tray sits below the frame, so a tap otherwise drops the
+      // sticker onto a canvas that's scrolled off screen and looks like a no-op.
+      containerRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     };
     img.src = url;
   }
@@ -193,14 +292,16 @@ export default function Page() {
     if (e.dataTransfer.files?.length) handleStickerFiles(e.dataTransfer.files, at);
   }
 
+  /* Only callable while step 2 is on screen — the EditorCanvas is unmounted at
+     the share step, so the URL captured on Finish is the one we keep. */
   function exportImage(): string {
-    const url = canvasRef.current?.exportPNG(isHH ? 2048 : 1600) || "";
-    setExportedUrl(url);
+    const url = canvasRef.current?.exportPNG(1600) || "";
+    if (url) setExportedUrl(url);
     return url;
   }
 
   function download() {
-    const url = exportImage();
+    const url = exportedUrl || exportImage();
     if (!url) return;
     const a = document.createElement("a");
     a.href = url;
@@ -209,50 +310,26 @@ export default function Page() {
   }
 
   async function shareToX() {
-    const url = exportImage();
-    if (!url) return;
-    const caption = `Locked in for HH Goa 2026 🌴 ${
-      names.filter(Boolean).length ? `— ${names.filter(Boolean).join(" x ")}` : ""
-    } #FrameInGoa`;
-
-    const blob = await (await fetch(url)).blob();
-    const file = new File([blob], "hhgoa-2026-frame.png", { type: "image/png" });
-
-    if (typeof navigator.share === "function" && (navigator as any).canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], text: caption });
-        return;
-      } catch {
-        // fall through to link share if user cancels/unsupported
-      }
-    }
-
     setBusy(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json();
-      if (data.cardUrl) {
-        const tweet = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
-          caption
-        )}&url=${encodeURIComponent(data.cardUrl)}`;
-        window.open(tweet, "_blank");
-      } else {
-        alert("Upload failed — download the image and attach it manually on X.");
-      }
-    } catch {
-      alert("Couldn't reach the server — download the image and attach it manually on X.");
-    } finally {
-      setBusy(false);
-    }
+    setShareNote(null);
+    const who = names.filter(Boolean);
+    const caption = `Locked in for HH Goa 2026 \u{1F334}${who.length ? ` \u2014 ${who.join(" x ")}` : ""} #FrameInGoa`;
+    // Runs synchronously up to its first await, so the intent window it opens
+    // still counts as user-initiated and survives the popup blocker.
+    const problem = await shareImageToX({
+      dataUrl: exportedUrl || exportImage(),
+      filename: isHH ? "hacker-house-memories.png" : "hhgoa-2026-frame.png",
+      caption,
+    });
+    setShareNote(problem);
+    setBusy(false);
   }
 
   const slots = layout?.slots ?? [];
 
   return (
-    <main style={{ minHeight: "100dvh", padding: "20px 16px 60px", maxWidth: 1100, margin: "0 auto" }}>
-      <Header step={step} />
+    <main style={{ minHeight: "100dvh", padding: "20px 16px 60px", maxWidth: 1400, margin: "0 auto" }}>
+      {step !== 2 && <Header step={step} />}
 
       {step === 0 && <StepTeamSize onPick={pickTeamSize} />}
 
@@ -265,217 +342,198 @@ export default function Page() {
       )}
 
       {step === 2 && layout && (
-        <div>
-          {/* Full-width canvas preview — outside the white card.
-              The frame art is the same green as the page, so the stage sits on
-              a white mat with a black border to read as a print. The mat is a
-              separate wrapper: containerRef is measured for the stage size and
-              for sticker drop coordinates, so it must stay padding-free. */}
-          <div
-            style={{
-              background: "#ffffff",
-              border: "3px solid #0a2a1c",
-              borderRadius: 16,
-              padding: 12,
-              marginBottom: 20,
-              boxShadow: "0 18px 40px rgba(0,0,0,.42)",
-            }}
-          >
-            <div
-              ref={containerRef}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-                setDragOverCanvas(true);
-              }}
-              onDragLeave={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCanvas(false);
-              }}
-              onDrop={handleCanvasDrop}
-              style={{
-                width: "100%",
-                position: "relative",
-                lineHeight: 0,
-                outline: dragOverCanvas ? "3px dashed var(--hh-yellow)" : "3px dashed transparent",
-                outlineOffset: 4,
-                borderRadius: 6,
-                overflow: "hidden",
-                transition: "outline-color .15s",
-              }}
-            >
-              <EditorCanvas
-                canvasRef={canvasRef}
-                slots={slots}
-                photos={photos}
-                onPhotoDrag={updatePhotoDrag}
-                activeSlot={activeSlot}
-                stickers={stickers}
-                onStickerUpdate={(id, partial) =>
-                  setStickers((prev) => prev.map((s) => (s.id === id ? { ...s, ...partial } : s)))
-                }
-                selectedStickerId={selectedStickerId}
-                onSelectSticker={setSelectedStickerId}
-                team={{ names, builderClass: generateBuilderClass(stacks) }}
-                displaySize={displaySize}
-                frameTheme={frameTheme}
-                canvasWidth={CW}
-                canvasHeight={CH}
-              />
+        <div className="ed-shell">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.heic,.heif"
+            hidden
+            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="user"
+            hidden
+            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+          />
+          <input
+            ref={stickerInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => e.target.files && handleStickerFiles(e.target.files)}
+          />
+
+          <div className="ed-top">
+            <div className="ed-logo">HH</div>
+            <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: "0.18em" }}>HH GOA · 2026</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#f2d21f", opacity: 0.5 }} />
+              <div style={{ width: 26, height: 8, borderRadius: 4, background: "#f2d21f" }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#f5f0e0", opacity: 0.3 }} />
+            </div>
+            <div className="ed-date" style={{ marginLeft: "auto", fontSize: 12, letterSpacing: "0.16em", opacity: 0.85 }}>
+              GOA, INDIA · 28–31 OCT 2026
             </div>
           </div>
 
-          {/* Narrower controls card */}
-          <div className="note-card" style={{ maxWidth: 640, margin: "0 auto" }}>
-            <div className="eyebrow">Step 3 / 4</div>
-            <h2 className="display" style={{ margin: "6px 0 14px", fontSize: 22 }}>
-              {isHH ? "Attach your pic" : "Fill your frame"}
-            </h2>
-
-            {/* Slot picker */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
-              {slots.map((_, i) => (
+          <div className="ed-body">
+            <div className="ed-rail">
+              {TOOLS.map((t) => (
                 <button
-                  key={i}
-                  onClick={() => setActiveSlot(i)}
-                  className="pill-btn"
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 12,
-                    background: activeSlot === i ? "#f4d913" : "#ffffff22",
-                    color: activeSlot === i ? "#0b5c39" : "#f6f0de",
-                    boxShadow: "none",
-                    backgroundImage: "none",
-                    paddingBottom: 8,
-                  }}
+                  key={t.id}
+                  onClick={() => runTool(t.id)}
+                  disabled={
+                    (t.id === "crop" && !original) ||
+                    (t.id === "undo" && !strokes.length) ||
+                    (t.id === "delete" && !selectedStickerId && !stickers.length)
+                  }
+                  title={t.name}
+                  aria-pressed={railTool === t.id}
+                  className={`ed-tool${railTool === t.id ? " active" : ""}${t.id === "delete" ? " danger" : ""}`}
                 >
-                  {isHH ? `Pic ${i + 1}` : `Slot ${i + 1}`} {photos[i]?.image ? "✓" : ""}
+                  <span className="glyph">{t.glyph}</span>
+                  <span>{t.name}</span>
                 </button>
               ))}
             </div>
 
-            {/* Upload controls */}
-            {activeSlot !== null && (
-              <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-                <button className="pill-btn" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-                  📁 Gallery
-                </button>
-                <button className="pill-btn pink" onClick={() => cameraInputRef.current?.click()} disabled={busy}>
-                  📷 Camera
-                </button>
-                {photos[activeSlot]?.image && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 160 }}>
-                    <span className="mono" style={{ fontSize: 12 }}>Zoom</span>
+            <div className="ed-main">
+              <div className="ed-opts">
+                <span className="label">{railTool.toUpperCase()}</span>
+                <div className="rule" />
+
+                {(railTool === "pen" || railTool === "eraser") && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+                    <span style={{ fontWeight: 700, letterSpacing: "0.12em", fontSize: 10 }}>SIZE</span>
                     <input
                       type="range"
-                      min={photos[activeSlot].baseScale}
-                      max={photos[activeSlot].baseScale * 3}
-                      step={0.001}
-                      value={photos[activeSlot].scale}
-                      onChange={(e) => setZoom(activeSlot, parseFloat(e.target.value))}
-                      style={{ flex: 1 }}
+                      min={4}
+                      max={128}
+                      value={brush.size}
+                      onChange={(e) => setBrush((b) => ({ ...b, size: Number(e.target.value) }))}
+                      aria-label="Brush size"
+                      style={{ width: 150, accentColor: "#cf3550" }}
                     />
+                    <span style={{ width: 44 }}>{brush.size}px</span>
                   </div>
                 )}
-              </div>
-            )}
 
-            <input ref={fileInputRef} type="file" accept="image/*,.heic,.heif" hidden
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
-            <input ref={cameraInputRef} type="file" accept="image/*" capture="user" hidden
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
-            <input ref={stickerInputRef} type="file" accept="image/*" multiple hidden
-              onChange={(e) => e.target.files && handleStickerFiles(e.target.files)} />
-
-            {/* Names / stack fields - classic only */}
-            {!isHH && (
-              <div style={{ borderTop: "1px dashed #0b5c3933", paddingTop: 14, marginTop: 6 }}>
-                <div className="eyebrow" style={{ color: "#0b5c3999" }}>Personalize</div>
-                {Array.from({ length: teamSize ?? 1 }).map((_, i) => (
-                  <div key={i} style={{ display: "flex", gap: 8, margin: "8px 0" }}>
-                    <input className="mono" placeholder={`Name ${i + 1}`} value={names[i] || ""}
-                      onChange={(e) => setNames((p) => { const n = [...p]; n[i] = e.target.value; return n; })}
-                      style={inputStyle} />
-                    <input className="mono" placeholder="Stack / role" value={stacks[i] || ""}
-                      onChange={(e) => setStacks((p) => { const n = [...p]; n[i] = e.target.value; return n; })}
-                      style={inputStyle} />
+                {railTool === "pen" && (
+                  <div style={{ display: "flex", gap: 5, alignItems: "center", flex: "none" }}>
+                    {PEN_COLORS.map((hex) => (
+                      <button
+                        key={hex}
+                        onClick={() => setBrush((b) => ({ ...b, color: hex }))}
+                        aria-label={`Pen colour ${hex}`}
+                        className={`ed-swatch${brush.color === hex ? " on" : ""}`}
+                        style={{ background: hex }}
+                      />
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-
-            {/* Sticker tray */}
-            <div style={{ borderTop: "1px dashed #0b5c3933", paddingTop: 14, marginTop: 14 }}>
-              <div className="eyebrow" style={{ color: "#0b5c3999" }}>
-                Stickers — drag one onto the frame, or tap to drop it in the middle
-              </div>
-
-              {/* Predefined sticker thumbnails */}
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-                {[{ id: "seksi", url: "/sticker-seksi.png", label: "सेक्सी" }, ...GOA_STICKERS].map(
-                  ({ id, url, label }) => (
-                    <StickerTile
-                      key={id}
-                      url={url}
-                      label={label}
-                      onAdd={() => addImageSticker(url)}
-                    />
-                  )
                 )}
 
-                {/* Custom image upload tile */}
-                <button
-                  onClick={() => stickerInputRef.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); setDragOverSticker(true); }}
-                  onDragLeave={() => setDragOverSticker(false)}
-                  onDrop={(e) => { e.preventDefault(); setDragOverSticker(false); handleStickerFiles(e.dataTransfer.files); }}
-                  style={{
-                    width: 80,
-                    height: 80,
-                    padding: 6,
-                    border: `2px dashed ${dragOverSticker ? "#f4d913" : "#0b5c3966"}`,
-                    borderRadius: 12,
-                    background: dragOverSticker ? "#f4d91318" : "#0b5c3911",
-                    cursor: "pointer",
-                    display: "flex",
-                    flexDirection: "column" as const,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 4,
-                    transition: "all 0.15s",
+                {railTool === "stickers" && (
+                  <div style={{ display: "flex", gap: 3, alignItems: "center", flex: "none" }}>
+                    {ALL_STICKERS.map(({ id, url, label }) => (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setTool("select");
+                          addImageSticker(url);
+                        }}
+                        title={label}
+                        aria-label={`Add ${label} sticker`}
+                        className="ed-sticker"
+                      >
+                        <img src={url} alt="" />
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => stickerInputRef.current?.click()}
+                      title="Upload your own"
+                      aria-label="Upload your own sticker"
+                      className="ed-sticker"
+                      style={{ fontSize: 15, fontWeight: 700 }}
+                    >
+                      ＋
+                    </button>
+                  </div>
+                )}
+
+                <span className="hint">{TOOL_HINTS[railTool]}</span>
+              </div>
+
+              <div
+                className="ed-canvas"
+                ref={containerRef}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                  setDragOverCanvas(true);
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCanvas(false);
+                }}
+                onDrop={handleCanvasDrop}
+                style={{
+                  outline: dragOverCanvas ? "3px solid #f2d21f" : undefined,
+                  outlineOffset: -3,
+                  cursor: tool === "select" ? "default" : "crosshair",
+                }}
+              >
+                <EditorCanvas
+                  canvasRef={canvasRef}
+                  slots={slots}
+                  photos={photos}
+                  onPhotoDrag={updatePhotoDrag}
+                  activeSlot={activeSlot}
+                  onSlotSelect={(i, isEmpty) => {
+                    setActiveSlot(i);
+                    if (isEmpty) fileInputRef.current?.click();
                   }}
-                >
-                  <span style={{ fontSize: 22 }}>＋</span>
-                  <span className="mono" style={{ fontSize: 9, opacity: 0.7, lineHeight: 1.2, textAlign: "center" as const }}>Custom image</span>
-                </button>
+                  stickers={stickers}
+                  onStickerUpdate={(id, partial) =>
+                    setStickers((prev) => prev.map((s) => (s.id === id ? { ...s, ...partial } : s)))
+                  }
+                  selectedStickerId={selectedStickerId}
+                  onSelectSticker={setSelectedStickerId}
+                  team={{ names, builderClass: generateBuilderClass(stacks) }}
+                  tool={tool}
+                  brush={brush}
+                  strokes={strokes}
+                  onAddStroke={(st) => setStrokes((v) => [...v, st])}
+                  displaySize={displaySize}
+                  frameTheme={frameTheme}
+                  canvasWidth={CW}
+                  canvasHeight={CH}
+                />
               </div>
 
-              {selectedStickerId && (
-                <button
-                  onClick={removeSelectedSticker}
-                  className="pill-btn pink"
-                  style={{ marginTop: 12, padding: "8px 14px", fontSize: 12, boxShadow: "none", backgroundImage: "none", paddingBottom: 8 }}
-                >
-                  🗑 Remove selected sticker
+              <div className="ed-foot">
+                <span style={{ fontSize: 12, letterSpacing: "0.06em", opacity: 0.85 }}>
+                  {photos.filter((p) => p.image).length} of {slots.length} filled
+                  {photos.every((p) => p.image) ? " · looking good" : " · tap an empty slot to add a photo"}
+                </span>
+                <button className="ed-btn" style={{ marginLeft: "auto" }} onClick={() => setStep(0)}>
+                  BACK
                 </button>
-              )}
+                <button
+                  className="ed-btn primary"
+                  onClick={() => {
+                    exportImage();
+                    setStep(3);
+                  }}
+                  disabled={photos.some((p) => !p.image)}
+                >
+                  FINISH →
+                </button>
+              </div>
             </div>
           </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", maxWidth: 640, margin: "18px auto 0" }}>
-            <button className="pill-btn ghost" onClick={() => setStep(1)}>Back</button>
-            <button
-              className="pill-btn pink"
-              onClick={() => { exportImage(); setStep(3); }}
-              disabled={photos.some((p) => !p.image)}
-            >
-              Finish →
-            </button>
-          </div>
-          {photos.some((p) => !p.image) && (
-            <p className="mono" style={{ fontSize: 12, opacity: 0.7, marginTop: 8, textAlign: "center" }}>
-              {isHH ? "Attach a pic to continue." : "Fill every slot to continue."}
-            </p>
-          )}
         </div>
       )}
 
@@ -486,10 +544,91 @@ export default function Page() {
           onDownload={download}
           onShare={shareToX}
           onBack={() => setStep(2)}
-          onRegenerate={exportImage}
+          note={shareNote}
+        />
+      )}
+
+      {cropping && original && (
+        <CropSheet
+          image={original}
+          aspect={slotAspect}
+          onDone={(img) => {
+            placeImage(img);
+            setCropping(false);
+          }}
+          onCancel={() => setCropping(false)}
+        />
+      )}
+
+      {cameraOpen && (
+        <CameraSheet
+          onCapture={handleFile}
+          onClose={() => setCameraOpen(false)}
+          onFallback={() => cameraInputRef.current?.click()}
         />
       )}
     </main>
+  );
+}
+
+const PEN_COLORS = ["#123c2b", "#f5f0e0", "#cf3550", "#f2d21f", "#4a9fd4", "#e2782a"];
+
+type RailTool = "photo" | "camera" | "crop" | "stickers" | "pen" | "eraser" | "move" | "undo" | "delete";
+
+const TOOLS: { id: RailTool; name: string; glyph: string }[] = [
+  { id: "photo", name: "PHOTO", glyph: "▣" },
+  { id: "camera", name: "CAMERA", glyph: "◉" },
+  { id: "crop", name: "CROP", glyph: "✂" },
+  { id: "stickers", name: "STICKERS", glyph: "☺" },
+  { id: "pen", name: "PEN", glyph: "✎" },
+  { id: "eraser", name: "ERASER", glyph: "▭" },
+  { id: "move", name: "MOVE", glyph: "✥" },
+  { id: "undo", name: "UNDO", glyph: "↩" },
+  { id: "delete", name: "DELETE", glyph: "✕" },
+];
+
+const TOOL_HINTS: Record<RailTool, string> = {
+  photo: "Pick a photo from your device",
+  camera: "Snap a photo with your camera",
+  crop: "Drag to reframe your photo",
+  stickers: "Tap a sticker to drop it on the frame",
+  pen: "Drag to doodle on the frame",
+  eraser: "Scrub over a doodle to rub it out",
+  move: "Drag photos, stickers and doodles around",
+  undo: "Steps back one doodle",
+  delete: "Removes the selected sticker",
+};
+
+/** Every sticker we ship, shown in the options bar strip. */
+const ALL_STICKERS = [{ id: "seksi", url: "/sticker-seksi.webp", label: "सेक्सी" }, ...GOA_STICKERS];
+
+function RailButton({
+  icon,
+  label,
+  onClick,
+  active,
+  disabled,
+}: {
+  icon: string;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      className={`rail-btn${active ? " active" : ""}`}
+    >
+      <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+      <span className="mono" style={{ fontSize: 9, letterSpacing: "0.04em" }}>
+        {label}
+      </span>
+    </button>
   );
 }
 
@@ -514,7 +653,7 @@ function StickerTile({ url, label, onAdd }: { url: string; label: string; onAdd:
         width: 80,
         height: 80,
         padding: 6,
-        border: `2px dashed ${hot ? "#f4d913" : "#0b5c3966"}`,
+        border: `2px solid ${hot ? "#f4d913" : "#0b5c3944"}`,
         borderRadius: 12,
         background: hot ? "#f4d91318" : "#0b5c3911",
         cursor: "grab",
@@ -544,70 +683,303 @@ const inputStyle: React.CSSProperties = {
   fontSize: 13,
 };
 
+function StepDots({ step, dark = false }: { step: number; dark?: boolean }) {
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          style={{
+            width: i === step ? 22 : 8,
+            height: 8,
+            borderRadius: 4,
+            background: i <= step ? "var(--hh-yellow)" : dark ? "#0b5c3925" : "#ffffff33",
+            transition: "all .2s",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function Header({ step }: { step: number }) {
   return (
-    <div style={{ textAlign: "center", marginBottom: 22 }}>
-      <div className="eyebrow">HH GOA · 2026</div>
-      <h1 className="display" style={{ fontSize: 34, margin: "4px 0 2px", color: "var(--hh-yellow)" }}>
-        Frame Generator
-      </h1>
-      <p className="mono" style={{ fontSize: 12, opacity: 0.75, margin: 0 }}>
-        GOA, INDIA · 28–31 OCT 2026
-      </p>
-      <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 14 }}>
-        {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            style={{
-              width: i === step ? 22 : 8,
-              height: 8,
-              borderRadius: 4,
-              background: i <= step ? "var(--hh-yellow)" : "#ffffff33",
-              transition: "all .2s",
-            }}
-          />
-        ))}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 16,
+        flexWrap: "wrap",
+        marginBottom: 40,
+      }}
+    >
+      <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+        <img src="/hhgoa-logo.svg" alt="HH Goa" style={{ height: 34, width: "auto" }} />
+        <span
+          className="mono"
+          style={{
+            fontSize: 12,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            color: "var(--hh-yellow)",
+            fontWeight: 600,
+          }}
+        >
+          HH Goa · 2026
+        </span>
+      </Link>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        {step > 0 && <StepDots step={step - 1} />}
+        <span className="mono" style={{ fontSize: 12, letterSpacing: "0.08em", opacity: 0.7 }}>
+          GOA, INDIA · 28–31 OCT 2026
+        </span>
       </div>
     </div>
   );
 }
 
 function StepTeamSize({ onPick }: { onPick: (n: 1 | 2 | 3) => void }) {
+  const TEAM_OPTIONS = [
+    { n: 1 as const, title: "1 Solo", desc: "Just you, front and center" },
+    { n: 2 as const, title: "2 Builders", desc: "Side-by-side duo layout" },
+    { n: 3 as const, title: "3 Builders", desc: "Trio grid layout" },
+  ];
+  const [hover, setHover] = useState<number | null>(null);
+
   return (
     <>
+      <section className="hero-grid" style={{ margin: "0 auto 56px" }}>
+        <div>
+          <h1
+            className="display"
+            style={{
+              fontWeight: 800,
+              fontSize: "clamp(34px, 5vw, 62px)",
+              lineHeight: 1.02,
+              margin: "0 0 20px",
+              color: "#ffffff",
+            }}
+          >
+            Get your{" "}
+            <span style={{ color: "var(--hh-yellow)", whiteSpace: "nowrap" }}>official frame</span>
+            <br />
+            for HH&nbsp;Goa 2026.
+          </h1>
+          <p className="mono" style={{ fontSize: 16, lineHeight: 1.6, color: "#f6f0deb0", maxWidth: 440, margin: "0 0 32px" }}>
+            Drop in a photo, we wrap it in the real event badge. Ready to set as your X profile picture in one tap.
+          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+            <button className="pill-btn" onClick={() => onPick(1)}>
+              Upload your photo →
+            </button>
+            <Link
+              href="/id"
+              className="mono"
+              style={{ fontSize: 13, color: "#f6f0dec0", textUnderlineOffset: 4 }}
+            >
+              or build a Builder ID card instead
+            </Link>
+          </div>
+        </div>
+
+        {/* Product shot: the actual frame art inside a mock post. */}
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <div style={{ position: "relative", width: "100%", maxWidth: 360 }}>
+            <div
+              style={{
+                background: "var(--hh-cream)",
+                borderRadius: 20,
+                padding: 18,
+                boxShadow: "0 24px 50px rgba(0,0,0,.45)",
+                transform: "rotate(2deg)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    border: "2px solid var(--hh-green)",
+                    background: "#0b5c3922",
+                  }}
+                />
+                <div style={{ lineHeight: 1.25 }}>
+                  <div className="display" style={{ fontWeight: 700, fontSize: 13, color: "var(--hh-green)" }}>
+                    You, Builder
+                  </div>
+                  <div className="mono" style={{ fontSize: 11, color: "#0b5c3999" }}>@yourhandle</div>
+                </div>
+              </div>
+              <div className="mono" style={{ fontSize: 13, color: "var(--hh-green)", marginBottom: 12, lineHeight: 1.5 }}>
+                Locked in for HH Goa 2026 🌴 #FrameInGoa
+              </div>
+              <div
+                style={{
+                  position: "relative",
+                  borderRadius: 12,
+                  overflow: "hidden",
+                  aspectRatio: `${HH_FRAME_W} / ${HH_FRAME_H}`,
+                  background: "var(--hh-cream)",
+                }}
+              >
+                <img
+                  src="/hh-memories-frame.webp"
+                  alt="HH Goa 2026 frame"
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                />
+                <div
+                  className="mono"
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 10,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    color: "#0b5c3966",
+                    fontWeight: 600,
+                  }}
+                >
+                  Your photo here
+                </div>
+                <div
+                  className="mono"
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    bottom: 10,
+                    background: "var(--hh-green)",
+                    color: "var(--hh-yellow)",
+                    fontSize: 9,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    padding: "4px 8px",
+                    borderRadius: 6,
+                  }}
+                >
+                  HH Goa · 2026
+                </div>
+              </div>
+            </div>
+            <div
+              className="mono"
+              style={{
+                position: "absolute",
+                top: -16,
+                right: -18,
+                width: 70,
+                height: 70,
+                borderRadius: "50%",
+                background: "var(--hh-pink)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 11,
+                fontWeight: 700,
+                textAlign: "center",
+                color: "var(--hh-cream)",
+                lineHeight: 1.15,
+                boxShadow: "0 10px 20px rgba(0,0,0,.35)",
+                border: "2px solid var(--hh-green-dark)",
+                animation: "hh-float 4s ease-in-out infinite",
+              }}
+            >
+              THIS
+              <br />
+              COULD
+              <br />
+              BE YOU
+            </div>
+          </div>
+        </div>
+      </section>
+
       <Link
         href="/id"
-        className="note-card"
+        className="mono"
         style={{
-          display: "block",
-          marginBottom: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
           textDecoration: "none",
-          borderLeft: "8px solid var(--hh-pink)",
+          background: "#f6f0de0f",
+          border: "1px solid #f6f0de40",
+          borderRadius: 12,
+          padding: "14px 18px",
+          color: "var(--hh-cream)",
+          maxWidth: 560,
+          margin: "0 0 18px",
         }}
       >
-        <div className="eyebrow">Solo? Try this instead</div>
-        <h2 className="display" style={{ margin: "6px 0 4px", fontSize: 22 }}>
-          Builder ID Card →
-        </h2>
-        <p className="mono" style={{ fontSize: 13, opacity: 0.75, margin: 0 }}>
-          Your photo, name and stack on an HH Goa event badge. One screen, download or post it straight to X.
-        </p>
+        <span style={{ fontSize: 18 }}>🪪</span>
+        <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+          <strong style={{ color: "var(--hh-yellow)" }}>Going solo?</strong> Try the Builder ID Card: photo, name
+          &amp; stack on one badge →
+        </span>
       </Link>
 
       <div className="note-card">
-        <div className="eyebrow">Step 1 / 4</div>
-      <h2 className="display" style={{ margin: "6px 0 4px", fontSize: 22 }}>
-        How many builders?
-      </h2>
-      <p className="mono" style={{ fontSize: 13, opacity: 0.75, margin: "0 0 18px" }}>
-        HH Goa teams run 1–3 people. Pick your squad size.
-      </p>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {[1, 2, 3].map((n) => (
-            <button key={n} className="pill-btn" onClick={() => onPick(n as 1 | 2 | 3)} style={{ flex: 1, minWidth: 90 }}>
-              {n} {n === 1 ? "solo" : "builders"}
-            </button>
-          ))}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 10,
+            marginBottom: 6,
+          }}
+        >
+          <div className="eyebrow" style={{ color: "#0b5c3999" }}>Step 1 / 3</div>
+          <StepDots step={0} dark />
+        </div>
+        <h2 className="display" style={{ fontWeight: 800, fontSize: 26, margin: "2px 0 6px" }}>
+          How many builders?
+        </h2>
+        <p className="mono" style={{ fontSize: 13, color: "#0b5c3999", margin: "0 0 22px" }}>
+          HH Goa teams run 1–3 people. Pick your squad size, each has its own frame layout.
+        </p>
+
+        <div className="team-grid">
+          {TEAM_OPTIONS.map((opt) => {
+            const on = hover === opt.n;
+            return (
+              <button
+                key={opt.n}
+                onClick={() => onPick(opt.n)}
+                onMouseEnter={() => setHover(opt.n)}
+                onMouseLeave={() => setHover(null)}
+                className="mono"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  textAlign: "left",
+                  padding: "20px 16px",
+                  borderRadius: 14,
+                  border: `2px solid ${on ? "#f4d913" : "#0b5c3922"}`,
+                  background: on ? "#f4d9131a" : "#ffffffb0",
+                  color: "var(--hh-green-dark)",
+                  cursor: "pointer",
+                  transition: "all .15s",
+                  transform: on ? "translateY(-3px)" : "none",
+                  boxShadow: on ? "0 10px 0 -4px rgba(11,92,57,.15), 0 16px 26px rgba(0,0,0,.18)" : "none",
+                }}
+              >
+                <div className="display" style={{ fontSize: 22, marginBottom: 10, fontWeight: 800 }}>
+                  {opt.n}
+                </div>
+                <div className="display" style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+                  {opt.title}
+                </div>
+                <div style={{ fontSize: 11, color: "#0b5c3980" }}>{opt.desc}</div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </>
@@ -626,7 +998,7 @@ function StepLayout({
   const options = layoutsForSize(teamSize);
   return (
     <div className="note-card">
-      <div className="eyebrow">Step 2 / 4</div>
+      <div className="eyebrow">Pick your frame</div>
       <h2 className="display" style={{ margin: "6px 0 4px", fontSize: 22 }}>
         Pick your frame
       </h2>
@@ -667,7 +1039,7 @@ function StepLayout({
                 {isHH ? (
                   <>
                     <img
-                      src="/hh-memories-frame.png"
+                      src="/hh-memories-frame.webp"
                       alt="Hacker House Frame"
                       style={{
                         position: "absolute",
@@ -690,7 +1062,7 @@ function StepLayout({
                           width: `${s.w * 100}%`,
                           height: `${s.h * 100}%`,
                           background: "#0c0c0c55",
-                          border: "2px dashed #f4d913",
+                          border: "2px solid #f4d913",
                           borderRadius: 6,
                           boxSizing: "border-box",
                         }}
@@ -758,22 +1130,18 @@ function StepShare({
   onDownload,
   onShare,
   onBack,
-  onRegenerate,
+  note,
 }: {
   exportedUrl: string | null;
   busy: boolean;
   onDownload: () => void;
   onShare: () => void;
   onBack: () => void;
-  onRegenerate: () => void;
+  note: string | null;
 }) {
-  useEffect(() => {
-    onRegenerate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   return (
     <div className="note-card">
-      <div className="eyebrow">Step 4 / 4</div>
+      <div className="eyebrow">Step 3 / 3</div>
       <h2 className="display" style={{ margin: "6px 0 14px", fontSize: 22 }}>
         You&apos;re framed 🌴
       </h2>
@@ -792,6 +1160,11 @@ function StepShare({
           {busy ? "Preparing…" : "𝕏 Share to X"}
         </button>
       </div>
+      {note && (
+        <p className="mono" style={{ fontSize: 12, color: "#a03820", marginTop: 12 }}>
+          {note}
+        </p>
+      )}
       <button className="pill-btn ghost" onClick={onBack} style={{ marginTop: 14 }}>
         ← Edit again
       </button>

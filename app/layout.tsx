@@ -1,17 +1,16 @@
 import type { Metadata } from "next";
-import { Fraunces, Space_Mono } from "next/font/google";
+import { Playfair_Display, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Fraunces({
+const display = Playfair_Display({
   subsets: ["latin"],
-  weight: ["600", "900"],
-  style: ["normal", "italic"],
+  weight: ["700", "800", "900"],
   variable: "--font-display",
 });
 
-const mono = Space_Mono({
+const mono = IBM_Plex_Mono({
   subsets: ["latin"],
-  weight: ["400", "700"],
+  weight: ["400", "500", "600", "700"],
   variable: "--font-mono",
 });
 

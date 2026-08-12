@@ -1,43 +1,63 @@
 "use client";
 
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Group, Rect, Image as KonvaImage, Text, Transformer } from "react-konva";
+import { Stage, Layer, Group, Rect, Arc, Circle, Image as KonvaImage, Text } from "react-konva";
 import Konva from "konva";
+import StickerTransformer from "./StickerTransformer";
 
-/* The card is the Goa frame artwork with an ID strip underneath. The frame PNG
-   is 2048x1152 with a transparent surround (art sits at x 338-1726, y 74-1074),
-   so it drops straight onto the brand green and the strip below reads as part
-   of the same composition. */
-export const FRAME_W = 2048;
-export const FRAME_H = 1152;
-export const CARD_W = 2048;
-export const CARD_H = 1440;
+/* Lanyard badge, transcribed from the Claude Design "Builder ID Card" comp.
+   The comp is authored at 420px wide on a 30px page margin, so every number
+   below is its own px value passed through u() — that keeps this file diffable
+   against the design instead of a pile of pre-multiplied constants. */
+const DESIGN_W = 480; // 420 card + 30 margin each side
+const DESIGN_H = 770;
 
-/** Left/right edges of the artwork, so the ID strip lines up with the board. */
-const ART_L = 338;
-const ART_R = 1726;
+export const CARD_W = 1080;
+export const CARD_H = Math.round((CARD_W * DESIGN_H) / DESIGN_W);
+
+const U = CARD_W / DESIGN_W;
+const u = (n: number) => n * U;
 
 const GREEN = "#0b5c39";
+const GREEN_DARK = "#073d26";
 const YELLOW = "#f4d913";
 const PINK = "#ec1876";
 const CREAM = "#f6f0de";
 const INK = "#0a2a1c";
 
-/* Photo window ratios, identical to the memories frame in EditorCanvas so both
-   formats sit the photo in exactly the same place. */
-const MAT = { x: 0.317 * FRAME_W, y: 0.248 * FRAME_H, w: 0.381 * FRAME_W, h: 0.475 * FRAME_H };
-const BEVEL = { x: 0.32 * FRAME_W, y: 0.252 * FRAME_H, w: 0.375 * FRAME_W, h: 0.467 * FRAME_H };
-const SLOT = { x: 0.322 * FRAME_W, y: 0.255 * FRAME_H, w: 0.371 * FRAME_W, h: 0.462 * FRAME_H };
+/* Card box, design px. */
+const CARD = { x: 30, y: 30, w: 420, h: 710 };
+/* Header centres inside its padding box (26 left / 100 right), which is what
+   keeps it clear of the VERIFIED stamp. */
+const HEAD_CX = CARD.x + 26 + (CARD.w - 26 - 100) / 2;
 
-/* ID strip. The frame art carries its own drop shadow and was drawn for a
-   light background, so the card sits on cream and the details go on a green
-   band — on a green card the artwork's board blends into the backdrop. */
-const BAND_Y = 1120;
-const EYEBROW_Y = 1150;
-const NAME_Y = 1196;
-const ROLE_Y = 1320;
-const BOARD_Y = 1200;
-const BOARD_H = 96;
+const PANEL = { x: CARD.x + 22, y: CARD.y + 100, w: 376, h: 526 };
+const PHOTO_BOX = { x: CARD.x + 36, y: CARD.y + 114, size: 348 };
+const PHOTO_BORDER = 5;
+
+/* Konva centres a stroke on its path, so insetting by the full border width
+   leaves a sliver of the dark fill showing inside the yellow frame. */
+const PHOTO_INSET = PHOTO_BORDER / 2;
+export const SLOT = {
+  x: u(PHOTO_BOX.x + PHOTO_INSET),
+  y: u(PHOTO_BOX.y + PHOTO_INSET),
+  w: u(PHOTO_BOX.size - PHOTO_INSET * 2),
+  h: u(PHOTO_BOX.size - PHOTO_INSET * 2),
+};
+/** The photo window is square, so this is the ratio the cropper enforces. */
+export const PHOTO_ASPECT = 1;
+
+/* Stickers land in the middle of the photo. */
+export const DROP_X = SLOT.x + SLOT.w / 2;
+export const DROP_Y = SLOT.y + SLOT.h / 2;
+
+const NAME_Y = CARD.y + 476;
+const PILL_Y = CARD.y + 519;
+const PILL_H = 33;
+const BOX_Y = CARD.y + 566;
+const BOX_H = 42;
+const PERF_Y = CARD.y + 644;
+const FOOT_Y = CARD.y + 658;
 
 export type IdPhoto = {
   image: HTMLImageElement | null;
@@ -60,6 +80,7 @@ type Props = {
   photo: IdPhoto;
   name: string;
   role: string;
+  building: string;
   title: string;
   code: string;
   displayWidth: number;
@@ -126,10 +147,20 @@ function measureText(text: string, font: string): number {
   return ctx.measureText(text).width;
 }
 
+/* Deselect when the tap misses every sticker. Testing `e.target === stage`
+   doesn't work: the card paints a full-bleed background, so the stage itself is
+   never the event target and the selection could never be cleared. Transformer
+   anchors are excluded or grabbing a handle would deselect. */
+function isOffSticker(e: Konva.KonvaEventObject<unknown>) {
+  const t = e.target;
+  return !t.findAncestor(".sticker", true) && !t.findAncestor("Transformer", true);
+}
+
 export default function IdCardCanvas({
   photo,
   name,
   role,
+  building,
   title,
   code,
   displayWidth,
@@ -144,14 +175,6 @@ export default function IdCardCanvas({
   const trRef = useRef<Konva.Transformer>(null);
   const stickerNodeRefs = useRef<Record<string, Konva.Group | null>>({});
   const fonts = useBrandFonts();
-  const [frame, setFrame] = useState<HTMLImageElement | null>(null);
-
-  useEffect(() => {
-    const img = new window.Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => setFrame(img);
-    img.src = "/hh-memories-frame.png";
-  }, []);
 
   const scale = displayWidth / CARD_W;
   const stageW = CARD_W * scale;
@@ -178,7 +201,7 @@ export default function IdCardCanvas({
     },
   }));
 
-  /* Cover-fit the photo into the window, then apply the user's zoom. */
+  /* Cover-fit the photo into the square window, then apply the user's zoom. */
   const fit = useMemo(() => {
     const img = photo.image;
     if (!img) return null;
@@ -204,16 +227,60 @@ export default function IdCardCanvas({
       }
     : { x: SLOT.x, y: SLOT.y };
 
-  const displayName = (name.trim() || "YOUR NAME").toUpperCase();
-  const nameSize = displayName.length > 22 ? 64 : displayName.length > 16 ? 78 : 96;
-  const titleSize = title.length > 22 ? 36 : 44;
+  const displayName = name.trim() || "Your Name";
+  const nameSize = displayName.length > 20 ? 22 : displayName.length > 14 ? 27 : 32;
+  const pillText = title.toUpperCase();
+  const pillSize = pillText.length > 26 ? 9 : 11;
 
-  /* Pink board hugs the title, right-aligned to the artwork edge. */
-  const board = useMemo(() => {
-    const width = measureText(title, `bold ${titleSize}px ${fonts.mono}`) + 64;
-    return { width, x: ART_R - width };
+  /* The pink pill hugs its label. */
+  const pill = useMemo(() => {
+    const w = measureText(pillText, `700 ${u(pillSize)}px ${fonts.mono}`) + u(36);
+    return { w, x: CARD_W / 2 - w / 2 };
     // fonts.ready re-measures once the real faces are available.
-  }, [title, titleSize, fonts.mono, fonts.ready]);
+  }, [pillText, pillSize, fonts.mono, fonts.ready]);
+
+  const boxW = (PANEL.w - 28 - 8) / 2; // panel padding 14 each side, 8px gap
+
+  const infoBox = (key: string, x: number, label: string, value: string) => (
+    <Group key={key} listening={false}>
+      <Rect
+        x={u(x)}
+        y={u(BOX_Y)}
+        width={u(boxW)}
+        height={u(BOX_H)}
+        cornerRadius={u(10)}
+        fill="#0b5c390d"
+        stroke="#0b5c3955"
+        strokeWidth={u(1.5)}
+        dash={[u(5), u(4)]}
+      />
+      <Text
+        text={label}
+        x={u(x)}
+        y={u(BOX_Y + 8)}
+        width={u(boxW)}
+        align="center"
+        fontFamily={fonts.mono}
+        fontStyle="700"
+        fontSize={u(8)}
+        letterSpacing={u(0.8)}
+        fill="#0b5c3990"
+      />
+      <Text
+        text={value}
+        x={u(x + 6)}
+        y={u(BOX_Y + 21)}
+        width={u(boxW - 12)}
+        align="center"
+        wrap="none"
+        ellipsis
+        fontFamily={fonts.mono}
+        fontStyle="700"
+        fontSize={u(11.5)}
+        fill={GREEN_DARK}
+      />
+    </Group>
+  );
 
   return (
     <Stage
@@ -223,147 +290,303 @@ export default function IdCardCanvas({
       scaleX={scale}
       scaleY={scale}
       onMouseDown={(e) => {
-        if (e.target === e.target.getStage()) onSelectSticker(null);
+        if (isOffSticker(e)) onSelectSticker(null);
       }}
       onTouchStart={(e) => {
-        if (e.target === e.target.getStage()) onSelectSticker(null);
+        if (isOffSticker(e)) onSelectSticker(null);
       }}
     >
       <Layer>
-        {/* Page */}
-        <Rect x={0} y={0} width={CARD_W} height={CARD_H} fill={CREAM} />
-        <Rect x={0} y={0} width={CARD_W} height={14} fill={GREEN} />
-        <Rect x={0} y={BAND_Y} width={CARD_W} height={CARD_H - BAND_Y} fill={GREEN} />
-        <Rect x={0} y={BAND_Y} width={CARD_W} height={10} fill={YELLOW} />
+        {/* Page behind the badge — also what the torn ticket edges are cut from */}
+        <Rect x={0} y={0} width={CARD_W} height={CARD_H} fill={GREEN_DARK} listening={false} />
 
-        {/* Photo, matted into the frame's window before the frame goes on top */}
-        <Rect
-          x={MAT.x}
-          y={MAT.y}
-          width={MAT.w}
-          height={MAT.h}
-          cornerRadius={18}
-          fill={CREAM}
-          stroke="#e8dfc4"
-          strokeWidth={4}
-        />
-        <Rect x={BEVEL.x} y={BEVEL.y} width={BEVEL.w} height={BEVEL.h} cornerRadius={14} fill="#ffffff" />
-        <Rect x={SLOT.x} y={SLOT.y} width={SLOT.w} height={SLOT.h} cornerRadius={10} fill="#0c0c0c" />
-        <Group clipFunc={(ctx) => roundRectPath(ctx, SLOT.x, SLOT.y, SLOT.w, SLOT.h, 10)}>
-          {photo.image && fit && (
-            <KonvaImage
-              image={photo.image}
-              x={photoPos.x}
-              y={photoPos.y}
-              width={fit.drawW}
-              height={fit.drawH}
-              draggable
-              onDragMove={(e) => {
-                const node = e.target;
-                node.x(clamp(node.x(), fit.minX, fit.maxX));
-                node.y(clamp(node.y(), fit.minY, fit.maxY));
-                onPhotoDrag(node.x() - SLOT.x, node.y() - SLOT.y);
-              }}
+        {/* Card body, clipped so the sun rays and torn edges stay inside it */}
+        <Group
+          clipFunc={(ctx) =>
+            roundRectPath(ctx as unknown as Konva.Context, u(CARD.x), u(CARD.y), u(CARD.w), u(CARD.h), u(26))
+          }
+        >
+          <Rect x={u(CARD.x)} y={u(CARD.y)} width={u(CARD.w)} height={u(CARD.h)} fill={GREEN} listening={false} />
+
+          {Array.from({ length: 15 }).map((_, i) => (
+            <Arc
+              key={i}
+              x={CARD_W / 2}
+              y={u(CARD.y + 60)}
+              innerRadius={u(52)}
+              outerRadius={u(130)}
+              angle={6}
+              rotation={i * 24}
+              fill={YELLOW}
+              opacity={0.32}
+              listening={false}
             />
-          )}
-        </Group>
-        {!photo.image && (
+          ))}
+
           <Text
-            text="YOUR PHOTO"
-            x={SLOT.x}
-            y={SLOT.y + SLOT.h / 2 - 20}
-            width={SLOT.w}
+            text="BUILDER ID · 2026"
+            x={u(HEAD_CX - 150)}
+            y={u(CARD.y + 24)}
+            width={u(300)}
             align="center"
             fontFamily={fonts.mono}
-            fontSize={40}
-            fill={CREAM}
-            opacity={0.5}
+            fontStyle="700"
+            fontSize={u(10)}
+            letterSpacing={u(2.2)}
+            fill={YELLOW}
+            listening={false}
           />
-        )}
+          <Text
+            text="HH GOA"
+            x={u(HEAD_CX - 150)}
+            y={u(CARD.y + 42)}
+            width={u(300)}
+            align="center"
+            fontFamily={fonts.display}
+            fontStyle="900"
+            fontSize={u(26)}
+            fill="#ffffff"
+            shadowColor={GREEN_DARK}
+            shadowOffsetY={u(3)}
+            shadowBlur={0}
+            listening={false}
+          />
+          <Text
+            text="GOA, INDIA · 28–31 OCT 2026"
+            x={u(HEAD_CX - 150)}
+            y={u(CARD.y + 76)}
+            width={u(300)}
+            align="center"
+            fontFamily={fonts.mono}
+            fontSize={u(10)}
+            letterSpacing={u(1)}
+            fill="#f6f0decc"
+            listening={false}
+          />
 
-        {/* The Goa frame itself, sitting over the photo edges */}
-        {frame && <KonvaImage image={frame} x={0} y={0} width={FRAME_W} height={FRAME_H} listening={false} />}
+          {/* VERIFIED BUILDER stamp */}
+          <Group x={u(CARD.x + CARD.w - 14 - 29)} y={u(CARD.y + 16 + 29)} rotation={-14} listening={false}>
+            <Circle radius={u(29)} stroke={YELLOW} strokeWidth={u(2.5)} dash={[u(7), u(5)]} />
+            <Text
+              text={"VERIFIED\nBUILDER\n★"}
+              x={u(-29)}
+              y={u(-14)}
+              width={u(58)}
+              align="center"
+              lineHeight={1.3}
+              fontFamily={fonts.mono}
+              fontStyle="700"
+              fontSize={u(7)}
+              letterSpacing={u(0.4)}
+              fill={YELLOW}
+            />
+          </Group>
 
-        {/* ID strip */}
-        <Text
-          text="BUILDER ID · GOA, INDIA · 28–31 OCT 2026"
-          x={ART_L}
-          y={EYEBROW_Y}
-          fontFamily={fonts.mono}
-          fontStyle="bold"
-          fontSize={32}
-          fill={CREAM}
-          opacity={0.75}
-        />
-        <Text
-          text={displayName}
-          x={ART_L}
-          y={NAME_Y}
-          width={board.x - ART_L - 40}
-          wrap="none"
-          ellipsis
-          fontFamily={fonts.display}
-          fontStyle="900"
-          fontSize={nameSize}
-          fill={YELLOW}
-        />
-        <Text
-          text={(role.trim() || "STACK / ROLE").toUpperCase()}
-          x={ART_L}
-          y={ROLE_Y}
-          width={board.x - ART_L - 40}
-          wrap="none"
-          ellipsis
-          fontFamily={fonts.mono}
-          fontStyle="bold"
-          fontSize={38}
-          fill={CREAM}
-          opacity={0.85}
-        />
+          {/* Cream photo panel */}
+          <Rect
+            x={u(PANEL.x)}
+            y={u(PANEL.y)}
+            width={u(PANEL.w)}
+            height={u(PANEL.h)}
+            cornerRadius={u(18)}
+            fill={CREAM}
+            shadowColor="#000000"
+            shadowOpacity={0.3}
+            shadowBlur={u(28)}
+            shadowOffsetY={u(14)}
+            listening={false}
+          />
 
-        {/* Builder title board */}
+          {/* Photo window */}
+          <Rect
+            x={u(PHOTO_BOX.x)}
+            y={u(PHOTO_BOX.y)}
+            width={u(PHOTO_BOX.size)}
+            height={u(PHOTO_BOX.size)}
+            cornerRadius={u(12)}
+            fill={GREEN_DARK}
+            stroke={YELLOW}
+            strokeWidth={u(PHOTO_BORDER)}
+            listening={false}
+          />
+          <Group
+            clipFunc={(ctx) =>
+              roundRectPath(ctx as unknown as Konva.Context, SLOT.x, SLOT.y, SLOT.w, SLOT.h, u(8))
+            }
+          >
+            {photo.image && fit && (
+              <KonvaImage
+                image={photo.image}
+                x={photoPos.x}
+                y={photoPos.y}
+                width={fit.drawW}
+                height={fit.drawH}
+                draggable
+                onDragMove={(e) => {
+                  const node = e.target;
+                  node.x(clamp(node.x(), fit.minX, fit.maxX));
+                  node.y(clamp(node.y(), fit.minY, fit.maxY));
+                  onPhotoDrag(node.x() - SLOT.x, node.y() - SLOT.y);
+                }}
+              />
+            )}
+          </Group>
+          {!photo.image && (
+            <Text
+              text="YOUR PHOTO"
+              x={SLOT.x}
+              y={SLOT.y + SLOT.h / 2 - u(8)}
+              width={SLOT.w}
+              align="center"
+              fontFamily={fonts.mono}
+              fontStyle="700"
+              fontSize={u(13)}
+              letterSpacing={u(1.5)}
+              fill={CREAM}
+              opacity={0.55}
+              listening={false}
+            />
+          )}
+
+          <Text
+            text={displayName}
+            x={u(PANEL.x + 8)}
+            y={u(NAME_Y)}
+            width={u(PANEL.w - 16)}
+            align="center"
+            wrap="none"
+            ellipsis
+            fontFamily={fonts.display}
+            fontStyle="900"
+            fontSize={u(nameSize)}
+            fill={GREEN_DARK}
+            listening={false}
+          />
+
+          {/* Builder title pill */}
+          <Rect
+            x={pill.x}
+            y={u(PILL_Y)}
+            width={pill.w}
+            height={u(PILL_H)}
+            cornerRadius={u(PILL_H / 2)}
+            fill={PINK}
+            stroke={INK}
+            strokeWidth={u(2)}
+            listening={false}
+          />
+          <Text
+            text={pillText}
+            x={pill.x}
+            y={u(PILL_Y) + (u(PILL_H) - u(pillSize) * 1.25) / 2}
+            width={pill.w}
+            align="center"
+            wrap="none"
+            ellipsis
+            fontFamily={fonts.mono}
+            fontStyle="700"
+            fontSize={u(pillSize)}
+            letterSpacing={u(0.4)}
+            fill={CREAM}
+            listening={false}
+          />
+
+          {infoBox("stack", PANEL.x + 14, "STACK", role.trim() || "Your stack")}
+          {infoBox("building", PANEL.x + 14 + boxW + 8, "BUILDING", building.trim() || "Your project")}
+
+          {/* Ticket perforation */}
+          <Rect x={u(CARD.x)} y={u(PERF_Y)} width={u(CARD.w)} height={u(2)} fill="#f6f0de55" listening={false} />
+          <Circle x={u(CARD.x)} y={u(PERF_Y)} radius={u(14)} fill={GREEN_DARK} listening={false} />
+          <Circle x={u(CARD.x + CARD.w)} y={u(PERF_Y)} radius={u(14)} fill={GREEN_DARK} listening={false} />
+
+          {/* Footer */}
+          <Text
+            text="BADGE ID"
+            x={u(CARD.x + 26)}
+            y={u(FOOT_Y)}
+            fontFamily={fonts.mono}
+            fontStyle="700"
+            fontSize={u(8)}
+            letterSpacing={u(1)}
+            fill="#f6f0de80"
+            listening={false}
+          />
+          <Text
+            text={code}
+            x={u(CARD.x + 26)}
+            y={u(FOOT_Y + 13)}
+            fontFamily={fonts.mono}
+            fontStyle="700"
+            fontSize={u(13)}
+            letterSpacing={u(0.4)}
+            fill={YELLOW}
+            listening={false}
+          />
+          <Text
+            text="#FrameInGoa 🌴"
+            x={u(CARD.x)}
+            y={u(FOOT_Y + 9)}
+            width={u(CARD.w - 26)}
+            align="right"
+            fontFamily={fonts.mono}
+            fontStyle="700"
+            fontSize={u(13)}
+            fill={CREAM}
+            listening={false}
+          />
+
+          {/* Palm silhouettes */}
+          <Text
+            text="🌴"
+            x={u(CARD.x - 4)}
+            y={u(CARD.y + CARD.h - 38)}
+            fontSize={u(44)}
+            opacity={0.14}
+            rotation={-8}
+            listening={false}
+          />
+          <Text
+            text="🌴"
+            x={u(CARD.x + CARD.w - 42)}
+            y={u(CARD.y + CARD.h - 36)}
+            fontSize={u(38)}
+            opacity={0.12}
+            rotation={10}
+            listening={false}
+          />
+        </Group>
+
+        {/* Outline drawn after the clip so the stroke isn't half cut off */}
         <Rect
-          x={board.x}
-          y={BOARD_Y}
-          width={board.width}
-          height={BOARD_H}
-          cornerRadius={10}
-          fill={PINK}
-          stroke={INK}
-          strokeWidth={7}
+          x={u(CARD.x)}
+          y={u(CARD.y)}
+          width={u(CARD.w)}
+          height={u(CARD.h)}
+          cornerRadius={u(26)}
+          stroke={GREEN_DARK}
+          strokeWidth={u(3)}
+          listening={false}
         />
-        <Text
-          text={title}
-          x={board.x}
-          y={BOARD_Y + (BOARD_H - titleSize * 1.2) / 2}
-          width={board.width}
-          align="center"
-          wrap="none"
-          ellipsis
-          fontFamily={fonts.mono}
-          fontStyle="bold"
-          fontSize={titleSize}
-          fill={CREAM}
-        />
-        <Text
-          text={`${code} · #FrameInGoa`}
-          x={ART_L}
-          y={ROLE_Y}
-          width={ART_R - ART_L}
-          align="right"
-          fontFamily={fonts.mono}
-          fontStyle="bold"
-          fontSize={34}
-          fill={YELLOW}
+
+        {/* Lanyard hole */}
+        <Circle
+          x={CARD_W / 2}
+          y={u(CARD.y - 1)}
+          radius={u(15)}
+          fill={GREEN_DARK}
+          stroke={GREEN}
+          strokeWidth={u(5)}
+          listening={false}
         />
       </Layer>
 
-      {/* Stickers ride above the frame so they can overlap the artwork */}
+      {/* Stickers ride above the card so they can overlap the artwork */}
       <Layer>
         {stickers.map((s) => (
           <Group
             key={s.id}
             id={s.id}
+            name="sticker"
             x={s.x}
             y={s.y}
             scaleX={s.scale}
@@ -395,14 +618,7 @@ export default function IdCardCanvas({
             />
           </Group>
         ))}
-        <Transformer
-          ref={trRef}
-          rotateEnabled
-          enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
-          borderStroke={YELLOW}
-          anchorStroke={YELLOW}
-          anchorFill={GREEN}
-        />
+        <StickerTransformer trRef={trRef} scale={scale} canvasWidth={CARD_W} />
       </Layer>
     </Stage>
   );

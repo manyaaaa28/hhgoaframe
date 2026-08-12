@@ -46,8 +46,7 @@ button {
   font-family: var(--font-display), serif;
 }
 
-/* Ticket-stub pill button — the signature interactive element,
-   echoing the dashed-edge "APPLY" pill from hhgoa.com */
+/* Ticket-stub pill button — the signature interactive element. */
 .pill-btn {
   display: inline-flex;
   align-items: center;
@@ -63,15 +62,6 @@ button {
   font-size: 15px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  background-image: repeating-linear-gradient(
-    90deg,
-    #073d26 0 8px,
-    transparent 8px 14px
-  );
-  background-size: 100% 3px;
-  background-repeat: no-repeat;
-  background-position: bottom 6px center, top 6px center;
-  padding-bottom: 16px;
   box-shadow: 0 6px 0 #b8a20d, 0 10px 18px rgba(0, 0, 0, 0.35);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
@@ -92,9 +82,14 @@ button {
   color: var(--hh-cream);
   box-shadow: none;
   border: 2px solid #ffffff33;
-  background-image: none;
-  padding-bottom: 14px;
 }
+/* .ghost is cream-on-transparent, which is invisible inside a cream note-card.
+   Every ghost button that lives on a card gets the ink treatment instead. */
+.note-card .pill-btn.ghost {
+  color: var(--hh-green);
+  border-color: #0b5c3944;
+}
+
 .pill-btn:disabled {
   opacity: 0.4;
   pointer-events: none;
@@ -122,10 +117,414 @@ button {
   box-shadow: 0 0 0 3px var(--hh-green-dark);
 }
 
+/* 45 stickers wrapped into a phone-width grid pushed the name fields and the
+   share button thousands of pixels below the fold. One swipeable row keeps the
+   whole flow on one screen; it only wraps once there's width to spare. */
+.sticker-tray {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.sticker-tray > * {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+@media (min-width: 760px) {
+  .sticker-tray {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
 .eyebrow {
   font-family: var(--font-mono), monospace;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 12px;
   color: var(--hh-yellow);
+}
+
+/* Hero, imported from the Claude Design "Frame Generator" comp. */
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 56px;
+  align-items: center;
+}
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+@media (max-width: 860px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes hh-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(-1deg);
+  }
+}
+
+/* MS-Paint style editor: a fixed tool rail on the left, the frame filling the
+   rest. Tools used to live in a card underneath a full-height canvas, so on a
+   laptop nothing but the preview was ever on screen. */
+.paint-shell {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.tool-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--hh-cream);
+  border-radius: 14px;
+  padding: 10px 8px;
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.28);
+  position: sticky;
+  top: 16px;
+}
+
+.rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 4px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: #0b5c390d;
+  color: var(--hh-green-dark);
+  font-family: var(--font-mono), monospace;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+}
+.rail-btn:hover:not(:disabled) {
+  background: #f4d9133a;
+  transform: translateY(-1px);
+}
+.rail-btn.active {
+  background: var(--hh-yellow);
+  border-color: var(--hh-green-dark);
+}
+.rail-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Flyout for the stickers / pen options, under the canvas row. */
+.tool-panel {
+  grid-column: 1 / -1;
+  background: var(--hh-cream);
+  color: var(--hh-green-dark);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.28);
+}
+
+.sticker-tile-add {
+  width: 72px;
+  height: 72px;
+  padding: 6px;
+  border: 2px solid #0b5c3944;
+  border-radius: 12px;
+  background: #0b5c3911;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--hh-green-dark);
+}
+
+@media (max-width: 720px) {
+  .paint-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* On a phone the rail sits under the frame as a swipeable strip. */
+  .tool-rail {
+    order: 2;
+    flex-direction: row;
+    overflow-x: auto;
+    position: static;
+    padding: 8px;
+  }
+  .rail-btn {
+    flex: 0 0 62px;
+  }
+  .tool-panel {
+    order: 3;
+  }
+}
+
+/* The editor wants the full page width; the landing copy does not. */
+.hero-grid,
+.note-card--narrow {
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+/* ============================================================
+   Editor shell — Claude Design "Editor Redesign" comp.
+   Full-viewport app chrome: nothing scrolls, the frame gets every
+   pixel left over after the rail, options bar and footer.
+   ============================================================ */
+.ed-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  background: #0b5d3e;
+  color: #f5f0e0;
+  font-family: var(--font-mono), monospace;
+}
+
+.ed-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+}
+.ed-logo {
+  width: 34px;
+  height: 34px;
+  background: #f2d21f;
+  color: #123c2b;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  border: 2px solid #123c2b;
+}
+
+.ed-body {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.ed-rail {
+  flex: none;
+  width: 76px;
+  background: #f5f0e0;
+  border: 2px solid #123c2b;
+  box-shadow: 4px 4px 0 rgba(9, 38, 26, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 5px;
+  overflow-y: auto;
+  color: #123c2b;
+}
+.ed-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 2px 5px;
+  font-family: inherit;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  color: #123c2b;
+  background: #f5f0e0;
+  border: 2px solid #d8d0b4;
+}
+.ed-tool:hover:not(:disabled) {
+  border-color: #123c2b;
+}
+.ed-tool.active {
+  background: #f2d21f;
+  border-color: #123c2b;
+}
+.ed-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ed-tool .glyph {
+  font-size: 16px;
+  line-height: 1;
+}
+.ed-tool.danger .glyph {
+  color: #cf3550;
+}
+
+.ed-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ed-opts {
+  flex: none;
+  min-height: 44px;
+  background: #f5f0e0;
+  border: 2px solid #123c2b;
+  box-shadow: 4px 4px 0 rgba(9, 38, 26, 0.4);
+  color: #123c2b;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  font-size: 11px;
+  overflow-x: auto;
+}
+.ed-opts .rule {
+  width: 2px;
+  height: 20px;
+  background: #d8d0b4;
+  flex: none;
+}
+.ed-opts .label {
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #0b5d3e;
+  flex: none;
+}
+.ed-opts .hint {
+  margin-left: auto;
+  opacity: 0.6;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  padding-left: 12px;
+}
+.ed-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  border: 2px solid #123c2b;
+}
+.ed-swatch.on {
+  border: 3px solid #cf3550;
+}
+.ed-sticker {
+  width: 30px;
+  height: 30px;
+  padding: 2px;
+  cursor: pointer;
+  flex: none;
+  background: #f5f0e0;
+  border: 2px solid #d8d0b4;
+  display: grid;
+  place-items: center;
+}
+.ed-sticker:hover {
+  border-color: #123c2b;
+}
+.ed-sticker img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.ed-canvas {
+  flex: 1;
+  min-height: 0;
+  background: #123c2b;
+  border: 2px solid #123c2b;
+  box-shadow: 4px 4px 0 rgba(9, 38, 26, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.ed-foot {
+  flex: none;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.ed-btn {
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  border: 2px solid #f5f0e0;
+  background: transparent;
+  color: #f5f0e0;
+  padding: 11px 24px;
+}
+.ed-btn:hover {
+  background: rgba(245, 240, 224, 0.12);
+}
+.ed-btn.primary {
+  background: #f2d21f;
+  color: #123c2b;
+  border-color: #123c2b;
+  box-shadow: 4px 4px 0 rgba(9, 38, 26, 0.4);
+  padding: 11px 28px;
+}
+.ed-btn.primary:hover:not(:disabled) {
+  background: #ffe94d;
+}
+.ed-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (max-width: 760px) {
+  .ed-shell {
+    padding: 10px 12px 12px;
+    gap: 8px;
+  }
+  .ed-body {
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+  /* The rail becomes a swipeable strip under the frame on a phone. */
+  .ed-rail {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 5px;
+  }
+  .ed-tool {
+    flex: 0 0 58px;
+  }
+  .ed-top .ed-date {
+    display: none;
+  }
+  .ed-foot {
+    min-height: 44px;
+    gap: 10px;
+  }
+  .ed-btn {
+    padding: 10px 16px;
+  }
 }

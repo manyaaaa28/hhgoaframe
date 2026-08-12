@@ -1,10 +1,13 @@
 "use client";
 
 import React, { useImperativeHandle, useRef, useEffect, useState } from "react";
-import { Stage, Layer, Group, Rect, Image as KonvaImage, Text, Circle, Transformer } from "react-konva";
+import { Stage, Layer, Group, Rect, Image as KonvaImage, Text, Circle, Line } from "react-konva";
 import Konva from "konva";
 import { CANVAS_SIZE, Slot, FrameTheme } from "@/lib/layouts";
 import { StickerArt, StickerKind } from "@/lib/stickers";
+import StickerTransformer from "./StickerTransformer";
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 export type PhotoState = {
   image: HTMLImageElement | null;
@@ -25,6 +28,16 @@ export type StickerInstance = {
   rotation: number;
 };
 
+export type Stroke = {
+  points: number[];
+  color: string;
+  size: number;
+  erase: boolean;
+};
+
+/** "select" moves photos and stickers; the others paint on the doodle layer. */
+export type Tool = "select" | "brush" | "eraser";
+
 export type TeamInfo = {
   names: string[];
   builderClass: string;
@@ -35,11 +48,17 @@ type Props = {
   photos: PhotoState[];
   onPhotoDrag: (index: number, offsetX: number, offsetY: number) => void;
   activeSlot: number | null;
+  /** Tapping a slot on the canvas picks it; an empty one also asks for a file. */
+  onSlotSelect?: (index: number, isEmpty: boolean) => void;
   stickers: StickerInstance[];
   onStickerUpdate: (id: string, partial: Partial<StickerInstance>) => void;
   selectedStickerId: string | null;
   onSelectSticker: (id: string | null) => void;
   team: TeamInfo;
+  tool: Tool;
+  brush: { color: string; size: number };
+  strokes: Stroke[];
+  onAddStroke: (s: Stroke) => void;
   displaySize: number;
   frameTheme?: FrameTheme;
   canvasWidth?: number;
@@ -82,16 +101,30 @@ function clipForShape(ctx: Konva.Context, w: number, h: number, shape: Slot["sha
   ctx.closePath();
 }
 
+/* Deselect when the tap misses every sticker. Testing `e.target === stage`
+   doesn't work: both canvases paint a full-bleed background Rect, so the stage
+   itself is never the event target and the selection could never be cleared.
+   Transformer anchors are excluded or grabbing a handle would deselect. */
+function isOffSticker(e: Konva.KonvaEventObject<unknown>) {
+  const t = e.target;
+  return !t.findAncestor(".sticker", true) && !t.findAncestor("Transformer", true);
+}
+
 export default function EditorCanvas({
   slots,
   photos,
   onPhotoDrag,
   activeSlot,
+  onSlotSelect,
   stickers,
   onStickerUpdate,
   selectedStickerId,
   onSelectSticker,
   team,
+  tool,
+  brush,
+  strokes,
+  onAddStroke,
   displaySize,
   frameTheme = "classic",
   canvasWidth: cw,
@@ -124,16 +157,20 @@ export default function EditorCanvas({
     const frame = new window.Image();
     frame.crossOrigin = "anonymous";
     frame.onload = () => setFrameImage(frame);
-    frame.src = "/hh-memories-frame.png";
+    frame.src = "/hh-memories-frame.webp";
   }, []);
 
   useImperativeHandle(canvasRef, () => ({
-    exportPNG: (targetWidth = isHH ? 2048 : 1600) => {
+    exportPNG: (targetWidth = 1600) => {
       const stage = stageRef.current;
       if (!stage) return "";
+      // Drop the selection handles so they don't bake into the export, then put
+      // them back — nothing else re-attaches them until the selection changes.
       trRef.current?.nodes([]);
       const pixelRatio = targetWidth / stageW;
       const url = stage.toDataURL({ pixelRatio, mimeType: "image/png" });
+      const node = selectedStickerId ? stickerNodeRefs.current[selectedStickerId] : null;
+      if (node) trRef.current?.nodes([node]);
       return url;
     },
   }));
@@ -145,6 +182,43 @@ export default function EditorCanvas({
       trRef.current.getLayer()?.batchDraw();
     }
   }, [selectedStickerId, stickers]);
+
+  /* Freehand doodles. The draft stroke lives here so the line follows the
+     pointer without a React round-trip per sample; it's handed up on release. */
+  const [draft, setDraft] = useState<Stroke | null>(null);
+  const drawing = useRef(false);
+  const painting = tool !== "select";
+
+  function canvasPoint() {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const pos = stage.getPointerPosition();
+    if (!pos) return null;
+    const inv = stage.getAbsoluteTransform().copy().invert();
+    const p = inv.point(pos);
+    return [p.x, p.y];
+  }
+
+  function startStroke() {
+    const p = canvasPoint();
+    if (!p) return;
+    drawing.current = true;
+    setDraft({ points: p, color: brush.color, size: brush.size, erase: tool === "eraser" });
+  }
+  function extendStroke() {
+    if (!drawing.current) return;
+    const p = canvasPoint();
+    if (!p) return;
+    setDraft((d) => (d ? { ...d, points: [...d.points, ...p] } : d));
+  }
+  function endStroke() {
+    if (!drawing.current) return;
+    drawing.current = false;
+    setDraft((d) => {
+      if (d && d.points.length >= 2) onAddStroke(d);
+      return null;
+    });
+  }
 
   const slotBg = isHH ? "#0c0c0c" : "#0a4a2c";
   const activeStroke = isHH ? "#f4d913" : "#f4d913";
@@ -158,27 +232,35 @@ export default function EditorCanvas({
       scaleX={scale}
       scaleY={scale}
       onMouseDown={(e) => {
-        if (e.target === e.target.getStage()) onSelectSticker(null);
+        if (painting) return startStroke();
+        if (isOffSticker(e)) onSelectSticker(null);
       }}
       onTouchStart={(e) => {
-        if (e.target === e.target.getStage()) onSelectSticker(null);
+        if (painting) {
+          e.evt.preventDefault();
+          return startStroke();
+        }
+        if (isOffSticker(e)) onSelectSticker(null);
       }}
+      onMouseMove={extendStroke}
+      onTouchMove={(e) => {
+        if (painting) e.evt.preventDefault();
+        extendStroke();
+      }}
+      onMouseUp={endStroke}
+      onTouchEnd={endStroke}
+      onMouseLeave={endStroke}
     >
       {/* Background / Frame chrome */}
       {isHH ? (
         <>
           <Layer listening={false}>
+            {/* Always painted: the frame art is transparent around the board, and
+                a transparent PNG posted to X renders on whatever the client
+                picks — usually black. */}
+            <Rect x={0} y={0} width={CANVAS_W} height={CANVAS_H} fill="#f6f0de" />
             {frameImage && (
-              <KonvaImage
-                image={frameImage}
-                x={0}
-                y={0}
-                width={CANVAS_W}
-                height={CANVAS_H}
-              />
-            )}
-            {!frameImage && (
-              <Rect x={0} y={0} width={CANVAS_W} height={CANVAS_H} fill="#0b5c39" />
+              <KonvaImage image={frameImage} x={0} y={0} width={CANVAS_W} height={CANVAS_H} />
             )}
           </Layer>
 
@@ -186,10 +268,10 @@ export default function EditorCanvas({
           <Layer listening={false}>
             {/* Outer shadow of the frame */}
             <Rect
-              x={0.311 * CANVAS_W}
-              y={0.242 * CANVAS_H}
-              width={0.393 * CANVAS_W}
-              height={0.487 * CANVAS_H}
+              x={0.2149 * CANVAS_W}
+              y={0.2052 * CANVAS_H}
+              width={0.5749 * CANVAS_W}
+              height={0.5566 * CANVAS_H}
               cornerRadius={Math.min(CANVAS_W, CANVAS_H) * 0.015}
               fill="#000000"
               opacity={0.18}
@@ -197,10 +279,10 @@ export default function EditorCanvas({
             />
             {/* Outer cream frame border (like a real mat/frame) */}
             <Rect
-              x={0.317 * CANVAS_W}
-              y={0.248 * CANVAS_H}
-              width={0.381 * CANVAS_W}
-              height={0.475 * CANVAS_H}
+              x={0.2237 * CANVAS_W}
+              y={0.2120 * CANVAS_H}
+              width={0.5574 * CANVAS_W}
+              height={0.5429 * CANVAS_H}
               cornerRadius={Math.min(CANVAS_W, CANVAS_H) * 0.011}
               fill="#f6f0de"
               stroke="#e8dfc4"
@@ -209,10 +291,10 @@ export default function EditorCanvas({
             />
             {/* Inner white bevel */}
             <Rect
-              x={0.320 * CANVAS_W}
-              y={0.252 * CANVAS_H}
-              width={0.375 * CANVAS_W}
-              height={0.467 * CANVAS_H}
+              x={0.2281 * CANVAS_W}
+              y={0.2166 * CANVAS_H}
+              width={0.5486 * CANVAS_W}
+              height={0.5337 * CANVAS_H}
               cornerRadius={Math.min(CANVAS_W, CANVAS_H) * 0.008}
               stroke="#ffffff"
               strokeWidth={2}
@@ -226,10 +308,10 @@ export default function EditorCanvas({
             <Layer listening={false}>
               {/* Red: outer picture frame boundary */}
               <Rect
-                x={0.317 * CANVAS_W}
-                y={0.248 * CANVAS_H}
-                width={0.381 * CANVAS_W}
-                height={0.475 * CANVAS_H}
+                x={0.2237 * CANVAS_W}
+                y={0.2120 * CANVAS_H}
+                width={0.5574 * CANVAS_W}
+                height={0.5429 * CANVAS_H}
                 stroke="#ff1744"
                 strokeWidth={3}
                 dash={[10, 8]}
@@ -237,10 +319,10 @@ export default function EditorCanvas({
               />
               {/* Cyan: safe inner photo slot */}
               <Rect
-                x={0.322 * CANVAS_W}
-                y={0.255 * CANVAS_H}
-                width={0.371 * CANVAS_W}
-                height={0.462 * CANVAS_H}
+                x={0.2310 * CANVAS_W}
+                y={0.2200 * CANVAS_H}
+                width={0.5427 * CANVAS_W}
+                height={0.5280 * CANVAS_H}
                 stroke="#00e5ff"
                 strokeWidth={2}
                 dash={[6, 6]}
@@ -263,40 +345,70 @@ export default function EditorCanvas({
           const pw = slot.w * CANVAS_W;
           const ph = slot.h * CANVAS_H;
           const photo = photos[i];
+          /* The image is cover-fit (scale >= baseScale), so it always covers the
+             slot — clamping the corner to [slot - overflow, 0] is what stops a
+             drag or a zoom change from opening a black gap at the edge. */
+          const drawW = (photo?.image?.width ?? 0) * (photo?.scale ?? 1);
+          const drawH = (photo?.image?.height ?? 0) * (photo?.scale ?? 1);
+          const centeredX = pw / 2 - drawW / 2;
+          const centeredY = ph / 2 - drawH / 2;
+          const photoX = clamp(centeredX + (photo?.offsetX ?? 0), Math.min(pw - drawW, 0), 0);
+          const photoY = clamp(centeredY + (photo?.offsetY ?? 0), Math.min(ph - drawH, 0), 0);
           return (
             <Group
               key={i}
               x={px}
               y={py}
               clipFunc={(ctx) => clipForShape(ctx as unknown as Konva.Context, pw, ph, slot.shape)}
+              onClick={() => onSlotSelect?.(i, !photo?.image)}
+              onTap={() => onSlotSelect?.(i, !photo?.image)}
             >
               <Rect width={pw} height={ph} fill={slotBg} />
               {photo?.image && (
                 <KonvaImage
                   image={photo.image}
-                  width={photo.image.width * photo.scale}
-                  height={photo.image.height * photo.scale}
-                  x={pw / 2 - (photo.image.width * photo.scale) / 2 + photo.offsetX}
-                  y={ph / 2 - (photo.image.height * photo.scale) / 2 + photo.offsetY}
-                  draggable
+                  width={drawW}
+                  height={drawH}
+                  x={photoX}
+                  y={photoY}
+                  draggable={!painting}
                   onDragMove={(e) => {
-                    const nx = e.target.x() - (pw / 2 - (photo.image!.width * photo.scale) / 2);
-                    const ny = e.target.y() - (ph / 2 - (photo.image!.height * photo.scale) / 2);
-                    onPhotoDrag(i, nx, ny);
+                    const node = e.target;
+                    node.x(clamp(node.x(), Math.min(pw - drawW, 0), 0));
+                    node.y(clamp(node.y(), Math.min(ph - drawH, 0), 0));
+                    onPhotoDrag(i, node.x() - centeredX, node.y() - centeredY);
                   }}
                 />
               )}
               {!photo?.image && (
-                <Text
-                  text={`${i + 1}`}
-                  width={pw}
-                  height={ph}
-                  align="center"
-                  verticalAlign="middle"
-                  fontFamily="var(--font-mono)"
-                  fontSize={Math.min(pw, ph) * 0.08}
-                  fill="#f4d91388"
-                />
+                <>
+                  <Text
+                    text={`+`}
+                    width={pw}
+                    height={ph}
+                    align="center"
+                    verticalAlign="middle"
+                    offsetY={Math.min(pw, ph) * 0.07}
+                    fontFamily="var(--font-mono)"
+                    fontSize={Math.min(pw, ph) * 0.16}
+                    fill="#f4d913aa"
+                    listening={false}
+                  />
+                  <Text
+                    text={`ADD PHOTO ${i + 1}`}
+                    width={pw}
+                    height={ph}
+                    align="center"
+                    verticalAlign="middle"
+                    offsetY={-Math.min(pw, ph) * 0.06}
+                    fontFamily="var(--font-mono)"
+                    fontStyle="bold"
+                    fontSize={Math.min(pw, ph) * 0.055}
+                    letterSpacing={Math.min(pw, ph) * 0.006}
+                    fill="#f4d913aa"
+                    listening={false}
+                  />
+                </>
               )}
               {activeSlot === i && (
                 <Rect width={pw} height={ph} stroke={activeStroke} strokeWidth={4} listening={false} />
@@ -414,18 +526,36 @@ export default function EditorCanvas({
         </Layer>
       )}
 
+      {/* Doodles. Its own layer so the eraser's destination-out only cuts
+          strokes, never the frame or the photo underneath. */}
+      <Layer listening={false}>
+        {[...strokes, ...(draft ? [draft] : [])].map((l, i) => (
+          <Line
+            key={i}
+            points={l.points}
+            stroke={l.color}
+            strokeWidth={l.size}
+            tension={0.35}
+            lineCap="round"
+            lineJoin="round"
+            globalCompositeOperation={l.erase ? "destination-out" : "source-over"}
+          />
+        ))}
+      </Layer>
+
       {/* Stickers */}
-      <Layer>
+      <Layer listening={!painting}>
         {stickers.map((s) => (
           <Group
             key={s.id}
             id={s.id}
+            name="sticker"
             x={s.x}
             y={s.y}
             scaleX={s.scale}
             scaleY={s.scale}
             rotation={s.rotation}
-            draggable
+            draggable={!painting}
             ref={(node) => {
               stickerNodeRefs.current[s.id] = node;
             }}
@@ -455,14 +585,7 @@ export default function EditorCanvas({
             )}
           </Group>
         ))}
-        <Transformer
-          ref={trRef}
-          rotateEnabled
-          enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
-          borderStroke="#f4d913"
-          anchorStroke="#f4d913"
-          anchorFill="#0b5c39"
-        />
+        <StickerTransformer trRef={trRef} scale={scale} canvasWidth={CANVAS_W} />
       </Layer>
     </Stage>
   );

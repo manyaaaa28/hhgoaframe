@@ -6,28 +6,31 @@ import Link from "next/link";
 import { nanoid } from "nanoid";
 import { fileToImage } from "@/lib/loadImage";
 import { generateBuilderTitle, generateBuilderCode } from "@/lib/builderTitle";
-import { buildOgComposite } from "@/lib/ogComposite";
+import { shareToX as shareImageToX } from "@/lib/share";
 import { GOA_STICKERS } from "@/lib/goaStickers";
-import { CARD_W, CARD_H } from "@/components/IdCardCanvas";
+import { cascadeDrop, STICKER_SIZE_RATIO } from "@/lib/stickerDrop";
+import CameraSheet from "@/components/CameraSheet";
+import CropSheet from "@/components/CropSheet";
+import { CARD_W, CARD_H, DROP_X, DROP_Y, PHOTO_ASPECT } from "@/components/IdCardCanvas";
 import type { IdCardHandle, IdPhoto, IdSticker } from "@/components/IdCardCanvas";
 
 const IdCardCanvas = dynamic(() => import("@/components/IdCardCanvas"), { ssr: false });
 
-/* The frame art is 2048px wide, so exporting at its native width keeps it
-   crisp without upscaling. */
-const EXPORT_WIDTH = 2048;
+/* The cropped frame art is 1400px wide; exporting a little above that keeps the
+   uploaded photo detailed without visibly softening the line art. */
+const EXPORT_WIDTH = 1600;
 
 /** Custom MIME so a sticker drag is distinguishable from a dragged image file. */
 const STICKER_DND_TYPE = "application/x-hh-sticker";
 
-/** Stickers land in the middle of the photo window by default. */
-const DROP_X = CARD_W / 2;
-const DROP_Y = 560;
 
 export default function BuilderIdPage() {
   const [photo, setPhoto] = useState<IdPhoto>({ image: null, offsetX: 0, offsetY: 0, zoom: 1 });
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
+  const [building, setBuilding] = useState("");
+  const [original, setOriginal] = useState<HTMLImageElement | null>(null);
+  const [cropping, setCropping] = useState(false);
   const [nudge, setNudge] = useState(0);
   const [loadingPhoto, setLoadingPhoto] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -37,6 +40,7 @@ export default function BuilderIdPage() {
   const [selectedStickerId, setSelectedStickerId] = useState<string | null>(null);
   const [dragOverCanvas, setDragOverCanvas] = useState(false);
   const [dragOverTray, setDragOverTray] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const cardRef = useRef<IdCardHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -58,11 +62,14 @@ export default function BuilderIdPage() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  /* Straight to the cropper: it's the only place the framing is big enough to
+     see, and it removes the guesswork of nudging the photo in the card window. */
   const handleFile = useCallback(async (file: File) => {
     setLoadingPhoto(true);
     try {
       const image = await fileToImage(file);
-      setPhoto({ image, offsetX: 0, offsetY: 0, zoom: 1 });
+      setOriginal(image);
+      setCropping(true);
     } catch {
       alert("Couldn't read that photo. Try another one?");
     } finally {
@@ -70,25 +77,31 @@ export default function BuilderIdPage() {
     }
   }, []);
 
-  /** Drops land under the pointer; taps land in the middle of the photo. */
+  /** Drops land under the pointer; taps fan out from the middle of the photo. */
   function addSticker(url: string, at?: { x: number; y: number }) {
     const img = new window.Image();
     img.onload = () => {
       const id = nanoid(6);
-      const targetPx = CARD_W * 0.16;
-      setStickers((prev) => [
-        ...prev,
-        {
-          id,
-          src: url,
-          imgEl: img,
-          x: at?.x ?? DROP_X,
-          y: at?.y ?? DROP_Y,
-          scale: targetPx / Math.max(img.width, img.height, 1),
-          rotation: 0,
-        },
-      ]);
+      const targetPx = CARD_W * STICKER_SIZE_RATIO;
+      setStickers((prev) => {
+        const spot = at ?? cascadeDrop(prev.length, DROP_X, DROP_Y, CARD_W);
+        return [
+          ...prev,
+          {
+            id,
+            src: url,
+            imgEl: img,
+            x: spot.x,
+            y: spot.y,
+            scale: targetPx / Math.max(img.width, img.height, 1),
+            rotation: 0,
+          },
+        ];
+      });
       setSelectedStickerId(id);
+      // On a phone the tray sits below the card, so a tap otherwise drops the
+      // sticker onto a canvas that's scrolled off screen and looks like a no-op.
+      stageWrapRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     };
     img.src = url;
   }
@@ -134,6 +147,21 @@ export default function BuilderIdPage() {
     setSelectedStickerId(null);
   }
 
+  /* Delete/Backspace removes the selected sticker, as long as the user isn't
+     typing in the name or stack fields. */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      if (!selectedStickerId) return;
+      e.preventDefault();
+      removeSelectedSticker();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   function exportCard(): string {
     return cardRef.current?.exportPNG(EXPORT_WIDTH) || "";
   }
@@ -148,47 +176,20 @@ export default function BuilderIdPage() {
     a.click();
   }
 
-  const caption = `${name.trim() ? `${name.trim()} — ` : ""}${title}. Building at HH Goa 2026 🌴 #FrameInGoa`;
+  const caption = `${name.trim() ? `${name.trim()}: ` : ""}${title}. Building at HH Goa 2026 🌴 #FrameInGoa`;
 
   async function shareToX() {
-    const url = exportCard();
-    if (!url) return;
     setSharing(true);
     setShareNote(null);
-    try {
-      const blob = await (await fetch(url)).blob();
-      const file = new File([blob], "hhgoa-2026-builder-id.png", { type: "image/png" });
-
-      // Phones: hand the actual file to the share sheet so it attaches to the
-      // tweet directly. Desktop has no such API, so fall back to a link whose
-      // OG image is the card.
-      if (typeof navigator.share === "function" && navigator.canShare?.({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file], text: caption });
-          return;
-        } catch (err) {
-          if ((err as Error)?.name === "AbortError") return;
-        }
-      }
-
-      const form = new FormData();
-      form.append("file", file);
-      const og = await buildOgComposite(url);
-      if (og) form.append("og", new File([og], "og.png", { type: "image/png" }));
-
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json();
-      if (!data.cardUrl) throw new Error(data.error || "upload failed");
-
-      window.open(
-        `https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}&url=${encodeURIComponent(data.cardUrl)}`,
-        "_blank"
-      );
-    } catch {
-      setShareNote("Couldn't reach the server — download the card and attach it on X manually.");
-    } finally {
-      setSharing(false);
-    }
+    // Runs synchronously up to its first await, so the intent window it opens
+    // still counts as user-initiated and survives the popup blocker.
+    const problem = await shareImageToX({
+      dataUrl: exportCard(),
+      filename: "hhgoa-2026-builder-id.png",
+      caption,
+    });
+    setShareNote(problem);
+    setSharing(false);
   }
 
   const ready = !!photo.image;
@@ -235,7 +236,7 @@ export default function BuilderIdPage() {
               style={{
                 width: displayWidth,
                 lineHeight: 0,
-                outline: dragOverCanvas ? "4px dashed var(--hh-yellow)" : "4px dashed transparent",
+                outline: dragOverCanvas ? "4px solid var(--hh-yellow)" : "4px solid transparent",
                 outlineOffset: -6,
                 transition: "outline-color .15s",
               }}
@@ -245,6 +246,7 @@ export default function BuilderIdPage() {
                 photo={photo}
                 name={name}
                 role={role}
+                building={building}
                 title={title}
                 code={code}
                 displayWidth={displayWidth}
@@ -262,17 +264,17 @@ export default function BuilderIdPage() {
           </div>
           {ready && (
             <p className="mono" style={{ fontSize: 11, opacity: 0.7, marginTop: 10, textAlign: "center" }}>
-              Drag the photo to reposition it. Tap a sticker to resize or spin it.
+              ✂ Use Crop to reframe your photo · tap a sticker to move, resize or spin it
             </p>
           )}
 
           {/* Sticker tray */}
           <div className="note-card" style={{ marginTop: 14 }}>
             <div className="eyebrow" style={{ color: "#0b5c3999" }}>
-              Stickers — drag one onto the card, or tap to drop it in the middle
+              Stickers. Drag one onto the card, or tap to drop it in the middle
             </div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              {[{ id: "seksi", url: "/sticker-seksi.png", label: "सेक्सी" }, ...GOA_STICKERS].map(
+            <div className="sticker-tray" style={{ marginTop: 10 }}>
+              {[{ id: "seksi", url: "/sticker-seksi.webp", label: "सेक्सी" }, ...GOA_STICKERS].map(
                 ({ id, url, label }) => (
                   <StickerTile key={id} url={url} label={label} onAdd={() => addSticker(url)} />
                 )
@@ -293,7 +295,7 @@ export default function BuilderIdPage() {
                   width: 72,
                   height: 72,
                   padding: 6,
-                  border: `2px dashed ${dragOverTray ? "#f4d913" : "#0b5c3966"}`,
+                  border: `2px solid ${dragOverTray ? "#f4d913" : "#0b5c3944"}`,
                   borderRadius: 12,
                   background: dragOverTray ? "#f4d91318" : "#0b5c3911",
                   cursor: "pointer",
@@ -321,35 +323,53 @@ export default function BuilderIdPage() {
               hidden
               onChange={(e) => e.target.files && addStickerFiles(e.target.files)}
             />
-            {selectedStickerId && (
-              <button
-                onClick={removeSelectedSticker}
-                className="pill-btn pink"
-                style={{
-                  marginTop: 12,
-                  padding: "8px 14px",
-                  fontSize: 12,
-                  boxShadow: "none",
-                  backgroundImage: "none",
-                  paddingBottom: 8,
-                }}
-              >
-                🗑 Remove selected sticker
-              </button>
+            {stickers.length > 0 && (
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <button
+                  onClick={removeSelectedSticker}
+                  disabled={!selectedStickerId}
+                  className="pill-btn pink"
+                  style={{ padding: "8px 14px", fontSize: 12, boxShadow: "none" }}
+                >
+                  🗑 Remove sticker
+                </button>
+                <button
+                  onClick={() => {
+                    setStickers([]);
+                    setSelectedStickerId(null);
+                  }}
+                  className="pill-btn ghost"
+                  style={{ padding: "8px 14px", fontSize: 12, color: "#0b5c39", borderColor: "#0b5c3944" }}
+                >
+                  Clear all ({stickers.length})
+                </button>
+                <span className="mono" style={{ fontSize: 11, opacity: 0.65 }}>
+                  {selectedStickerId ? "Delete key works too" : "Tap a sticker to select it"}
+                </span>
+              </div>
             )}
           </div>
         </div>
 
         {/* Controls */}
         <div className="note-card" style={{ flex: "1 1 320px", minWidth: 280 }}>
-          <div className="eyebrow">Step 1 — your photo</div>
+          <div className="eyebrow">Step 1 · your photo</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "10px 0 18px" }}>
             <button className="pill-btn" onClick={() => fileInputRef.current?.click()} disabled={loadingPhoto}>
               {loadingPhoto ? "Reading…" : "🖼 Gallery"}
             </button>
-            <button className="pill-btn pink" onClick={() => cameraInputRef.current?.click()} disabled={loadingPhoto}>
+            <button className="pill-btn pink" onClick={() => setCameraOpen(true)} disabled={loadingPhoto}>
               📷 Camera
             </button>
+            {original && (
+              <button
+                className="pill-btn ghost"
+                onClick={() => setCropping(true)}
+                style={{ color: "#0b5c39", borderColor: "#0b5c3944" }}
+              >
+                ✂ Crop
+              </button>
+            )}
           </div>
           <input
             ref={fileInputRef}
@@ -367,24 +387,8 @@ export default function BuilderIdPage() {
             onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
           />
 
-          {ready && (
-            <div style={{ marginBottom: 18 }}>
-              <label className="mono" style={{ fontSize: 11, opacity: 0.7 }}>
-                Zoom
-              </label>
-              <input
-                type="range"
-                min={1}
-                max={2.5}
-                step={0.01}
-                value={photo.zoom}
-                onChange={(e) => setPhoto((p) => ({ ...p, zoom: Number(e.target.value) }))}
-                style={{ width: "100%", accentColor: "#ec1876" }}
-              />
-            </div>
-          )}
 
-          <div className="eyebrow">Step 2 — your details</div>
+          <div className="eyebrow">Step 2 · your details</div>
           <div style={{ display: "grid", gap: 10, margin: "10px 0 18px" }}>
             <input
               className="mono"
@@ -395,9 +399,16 @@ export default function BuilderIdPage() {
             />
             <input
               className="mono"
-              placeholder="Stack / role — e.g. React, design"
+              placeholder="Stack / role, e.g. React, design"
               value={role}
               onChange={(e) => setRole(e.target.value)}
+              style={inputStyle}
+            />
+            <input
+              className="mono"
+              placeholder="What are you building?"
+              value={building}
+              onChange={(e) => setBuilding(e.target.value)}
               style={inputStyle}
             />
           </div>
@@ -429,13 +440,13 @@ export default function BuilderIdPage() {
             <button
               className="pill-btn ghost"
               onClick={() => setNudge((n) => n + 1)}
-              style={{ padding: "6px 12px", fontSize: 12 }}
+              style={{ padding: "6px 12px", fontSize: 12, color: "#0b5c39", borderColor: "#0b5c3944" }}
             >
               🎲 Reroll
             </button>
           </div>
 
-          <div style={{ borderTop: "1px dashed #0b5c3933", paddingTop: 16 }}>
+          <div style={{ borderTop: "1px solid #0b5c3322", paddingTop: 16 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="pill-btn" onClick={download} disabled={!ready}>
                 ⬇ Download
@@ -465,6 +476,26 @@ export default function BuilderIdPage() {
           </Link>
         </div>
       </div>
+
+      {cropping && original && (
+        <CropSheet
+          image={original}
+          aspect={PHOTO_ASPECT}
+          onDone={(image) => {
+            setPhoto({ image, offsetX: 0, offsetY: 0, zoom: 1 });
+            setCropping(false);
+          }}
+          onCancel={() => setCropping(false)}
+        />
+      )}
+
+      {cameraOpen && (
+        <CameraSheet
+          onCapture={handleFile}
+          onClose={() => setCameraOpen(false)}
+          onFallback={() => cameraInputRef.current?.click()}
+        />
+      )}
     </main>
   );
 }
@@ -488,7 +519,7 @@ function StickerTile({ url, label, onAdd }: { url: string; label: string; onAdd:
         width: 72,
         height: 72,
         padding: 6,
-        border: `2px dashed ${hot ? "#f4d913" : "#0b5c3966"}`,
+        border: `2px solid ${hot ? "#f4d913" : "#0b5c3944"}`,
         borderRadius: 12,
         background: hot ? "#f4d91318" : "#0b5c3911",
         cursor: "grab",
