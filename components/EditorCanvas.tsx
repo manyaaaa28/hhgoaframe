@@ -101,6 +101,32 @@ function clipForShape(ctx: Konva.Context, w: number, h: number, shape: Slot["sha
   ctx.closePath();
 }
 
+/* Paint is clipped to the photo windows so a doodle can't be dragged across the
+   frame artwork and wreck it — the frame is the one part of this image the user
+   is not meant to be able to destroy. Every slot is one subpath of a single
+   path, so multi-slot layouts clip to the union rather than the last slot. */
+function clipToSlots(ctx: Konva.Context, slots: Slot[], W: number, H: number) {
+  const r = 14;
+  ctx.beginPath();
+  for (const slot of slots) {
+    const x = slot.x * W;
+    const y = slot.y * H;
+    const w = slot.w * W;
+    const h = slot.h * H;
+    // moveTo opens a fresh subpath, so the rects union instead of chaining.
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+  }
+  ctx.closePath();
+}
+
 /* Deselect when the tap misses every sticker. Testing `e.target === stage`
    doesn't work: both canvases paint a full-bleed background Rect, so the stage
    itself is never the event target and the selection could never be cleared.
@@ -529,18 +555,20 @@ export default function EditorCanvas({
       {/* Doodles. Its own layer so the eraser's destination-out only cuts
           strokes, never the frame or the photo underneath. */}
       <Layer listening={false}>
-        {[...strokes, ...(draft ? [draft] : [])].map((l, i) => (
-          <Line
-            key={i}
-            points={l.points}
-            stroke={l.color}
-            strokeWidth={l.size}
-            tension={0.35}
-            lineCap="round"
-            lineJoin="round"
-            globalCompositeOperation={l.erase ? "destination-out" : "source-over"}
-          />
-        ))}
+        <Group clipFunc={(ctx) => clipToSlots(ctx as unknown as Konva.Context, slots, CANVAS_W, CANVAS_H)}>
+          {[...strokes, ...(draft ? [draft] : [])].map((l, i) => (
+            <Line
+              key={i}
+              points={l.points}
+              stroke={l.color}
+              strokeWidth={l.size}
+              tension={0.35}
+              lineCap="round"
+              lineJoin="round"
+              globalCompositeOperation={l.erase ? "destination-out" : "source-over"}
+            />
+          ))}
+        </Group>
       </Layer>
 
       {/* Stickers */}
