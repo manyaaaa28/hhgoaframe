@@ -21,9 +21,13 @@ export default function StickerTransformer({
   /* Screen-constant sizing, but capped as a share of the canvas. On a phone the
      stage scale is ~0.25, so an uncapped anchor becomes ~95 canvas units — wide
      enough to blanket neighbouring stickers, which then can't be tapped at all.
-     Konva adds its own touch hit-padding, so a 14px handle is still a
-     comfortable target while staying visually out of the way. */
-  const px = (n: number) => Math.min(n / scale, canvasWidth * (n / 14) * 0.04);
+
+     ANCHOR_PX is the handle's size in screen pixels. 14 read as chunky dots
+     against a stage this small; 9 sits out of the way and is still an easy
+     target, because Konva pads each anchor's hit area on touch well beyond
+     what it draws. */
+  const ANCHOR_PX = 9;
+  const px = (n: number) => Math.min(n / scale, canvasWidth * (n / ANCHOR_PX) * 0.026);
 
   /* enabledAnchors only hides the anchors it drops — Konva leaves them
      listening, so the four edge midpoints stay as invisible hit targets that
@@ -38,14 +42,14 @@ export default function StickerTransformer({
       rotateEnabled
       keepRatio
       enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
-      anchorSize={px(14)}
-      anchorCornerRadius={px(7)}
-      anchorStrokeWidth={px(1.5)}
-      borderStrokeWidth={px(1.5)}
-      borderDash={[px(6), px(5)]}
+      anchorSize={px(ANCHOR_PX)}
+      anchorCornerRadius={px(ANCHOR_PX / 2)}
+      anchorStrokeWidth={px(1.2)}
+      borderStrokeWidth={px(1.2)}
+      borderDash={[px(5), px(4)]}
       /* Kept short so the rotate handle stays inside the canvas when a sticker
          sits near the top edge — outside it, the browser never sees the click. */
-      rotateAnchorOffset={px(22)}
+      rotateAnchorOffset={px(16)}
       rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
       borderStroke="#f4d913"
       anchorStroke="#0a2a1c"
