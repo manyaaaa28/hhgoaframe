@@ -29,12 +29,31 @@ export default function StickerTransformer({
   const ANCHOR_PX = 9;
   const px = (n: number) => Math.min(n / scale, canvasWidth * (n / ANCHOR_PX) * 0.026);
 
-  /* enabledAnchors only hides the anchors it drops — Konva leaves them
-     listening, so the four edge midpoints stay as invisible hit targets that
-     swallow taps meant for whatever sticker sits under them. Runs on every
-     render because Konva rebuilds the anchors whenever the selection changes. */
+  /* Two jobs, both needing the live transformer.
+     1. enabledAnchors only hides the anchors it drops — Konva leaves them
+        listening, so the four edge midpoints stay as invisible hit targets
+        that swallow taps meant for whatever sticker sits under them.
+     2. A screen-constant handle is still far too big on a small sticker: the
+        nameplate strip is only ~16px tall on a phone, so 9px dots covered
+        more than half of it. The handle is capped against the selected
+        sticker's own on-screen size, so it shrinks with what it's holding.
+     Runs on every render because Konva rebuilds the anchors whenever the
+     selection changes. */
   useEffect(() => {
-    trRef.current?.find("._anchor").forEach((a) => a.listening(a.isVisible()));
+    const tr = trRef.current;
+    if (!tr) return;
+    tr.find("._anchor").forEach((a) => a.listening(a.isVisible()));
+
+    const node = tr.nodes()[0];
+    if (!node) return;
+    const rect = node.getClientRect(); // absolute, so already in screen pixels
+    const smallestSide = Math.min(rect.width, rect.height);
+    const screenPx = Math.max(4, Math.min(ANCHOR_PX, smallestSide * 0.32));
+    tr.anchorSize(screenPx / scale);
+    tr.anchorCornerRadius(screenPx / 2 / scale);
+    tr.anchorStrokeWidth(Math.max(0.75, screenPx * 0.13) / scale);
+    tr.rotateAnchorOffset(Math.max(9, screenPx * 1.7) / scale);
+    tr.getLayer()?.batchDraw();
   });
   return (
     <Transformer
