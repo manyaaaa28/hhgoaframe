@@ -288,10 +288,12 @@ export default function Page() {
   /* Only callable while step 2 is on screen — the EditorCanvas is unmounted at
      the share step, so the URL captured on Finish is the one we keep. */
   function exportImage(): string {
-    /* Export at the canvas's own width. The frame art is a 1400px bitmap, so
-       asking for 1600 resampled it up and softened every black outline —
-       bigger numbers, blurrier picture. */
-    const url = canvasRef.current?.exportPNG(CW) || "";
+    /* 2x the canvas. At 1x the photo window is only ~760px across, so a phone
+       photo gets thrown away down to that — and the photo is the subject. The
+       frame art is a 1400px bitmap and does get interpolated here, but that
+       costs nothing at any given display size, whereas the lost photo detail
+       is gone for good. */
+    const url = canvasRef.current?.exportPNG(CW * 2) || "";
     if (url) setExportedUrl(url);
     return url;
   }
