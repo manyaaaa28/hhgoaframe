@@ -51,6 +51,53 @@ function board(text: string, fill: string, ink: string, fontSize = 26) {
   );
 }
 
+export type BoardStyle = "yellow" | "pink" | "green";
+
+const BOARD_STYLES: Record<BoardStyle, { fill: string; ink: string }> = {
+  yellow: { fill: YELLOW, ink: INK },
+  pink: { fill: PINK, ink: CREAM },
+  green: { fill: GREEN, ink: YELLOW },
+};
+
+/**
+ * A sign board carrying whatever the user typed — their name, their stack,
+ * whatever. Same panel as the DAY boards, but the viewBox is sized to the text
+ * instead of fixed, so a short name doesn't float in a huge board and a long
+ * one doesn't overflow it. Space Mono is fixed-pitch, so character count is
+ * enough to work out the width without measuring.
+ */
+export function makeTextBoard(text: string, style: BoardStyle = "yellow"): string {
+  const label = text.trim().toUpperCase().slice(0, 28) || "YOUR NAME";
+  const { fill, ink } = BOARD_STYLES[style];
+  const fontSize = 40;
+  const advance = fontSize * 0.6; // Space Mono's fixed character width
+  const padding = 46;
+  const vbW = Math.max(240, Math.round(label.length * advance + padding * 2));
+  const vbH = 112;
+  const inset = 16;
+  return svgToDataUrl(
+    svg(
+      vbW,
+      vbH,
+      `<rect x="6" y="6" width="${vbW - 12}" height="${vbH - 12}" rx="7" fill="${fill}" stroke="${INK}" stroke-width="8"/>` +
+        `<rect x="${inset + 6}" y="${inset + 6}" width="${vbW - (inset + 6) * 2}" height="${vbH - (inset + 6) * 2}" ` +
+        `rx="3" fill="none" stroke="${CREAM}" stroke-width="3.5"/>` +
+        `<text x="${vbW / 2}" y="${vbH / 2 + fontSize * 0.35}" text-anchor="middle" font-family="${MONO}" ` +
+        `font-size="${fontSize}" font-weight="700" fill="${ink}">${escapeXml(label)}</text>`
+    )
+  );
+}
+
+/** Names carry apostrophes and ampersands; unescaped they break the SVG. */
+function escapeXml(s: string) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 /** Direction marker, like the beach signpost arrows on the site. */
 function arrow(text: string, fill: string, ink: string, dir: "left" | "right", fontSize = 24) {
   const shape =

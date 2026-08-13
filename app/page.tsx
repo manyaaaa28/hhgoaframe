@@ -6,7 +6,7 @@ import Link from "next/link";
 import { nanoid } from "nanoid";
 import { layoutsForSize, LayoutTemplate, CANVAS_SIZE, HH_FRAME_W, HH_FRAME_H } from "@/lib/layouts";
 import { fileToImage } from "@/lib/loadImage";
-import { GOA_STICKERS } from "@/lib/goaStickers";
+import { GOA_STICKERS, makeTextBoard, type BoardStyle } from "@/lib/goaStickers";
 import { shareToX as shareImageToX } from "@/lib/share";
 import { cascadeDrop, STICKER_SIZE_RATIO } from "@/lib/stickerDrop";
 import CameraSheet from "@/components/CameraSheet";
@@ -53,6 +53,8 @@ export default function Page() {
   const [panel, setPanel] = useState<"stickers" | "pen" | null>(null);
   const [brush, setBrush] = useState({ color: "#cf3550", size: 18 });
   const [railTool, setRailTool] = useState<RailTool>("move");
+  const [boardText, setBoardText] = useState("");
+  const [boardStyle, setBoardStyle] = useState<BoardStyle>("yellow");
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [shareNote, setShareNote] = useState<string | null>(null);
   const [original, setOriginal] = useState<HTMLImageElement | null>(null);
@@ -186,6 +188,16 @@ export default function Page() {
     }
   }
 
+  /* Boards ride the sticker pipeline, so they drag, scale and rotate with no
+     extra machinery — and they land wider than a sticker so the text reads. */
+  function addTextBoard() {
+    const text = boardText.trim();
+    if (!text) return;
+    setTool("select");
+    addImageSticker(makeTextBoard(text, boardStyle), undefined, 0.42);
+    setBoardText("");
+  }
+
   function removeSelectedSticker() {
     if (!selectedStickerId) return;
     setStickers((prev) => prev.filter((s) => s.id !== selectedStickerId));
@@ -216,12 +228,14 @@ export default function Page() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  /** Drops land where the pointer was; taps fan out from the middle of the frame. */
-  function addImageSticker(url: string, at?: { x: number; y: number }) {
+  /** Drops land where the pointer was; taps fan out from the middle of the frame.
+      Sign boards come in wider than a sticker so the text is readable at the
+      size it lands. */
+  function addImageSticker(url: string, at?: { x: number; y: number }, sizeRatio = STICKER_SIZE_RATIO) {
     const img = new window.Image();
     img.onload = () => {
       const id = nanoid(6);
-      const targetPx = CW * STICKER_SIZE_RATIO;
+      const targetPx = CW * sizeRatio;
       const scale = targetPx / Math.max(img.width, img.height, 1);
       setStickers((prev) => {
         const spot = at ?? cascadeDrop(prev, CW / 2, CH / 2, CW, CH);
@@ -454,6 +468,49 @@ export default function Page() {
                   </div>
                 )}
 
+                {railTool === "name" && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "none" }}>
+                    <input
+                      className="mono"
+                      value={boardText}
+                      onChange={(e) => setBoardText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addTextBoard();
+                      }}
+                      placeholder="Name or stack…"
+                      maxLength={28}
+                      aria-label="Sign board text"
+                      style={{
+                        width: 190,
+                        padding: "7px 10px",
+                        borderRadius: 7,
+                        border: "2px solid #0000002e",
+                        background: "#fffdf5",
+                        color: "#123c2b",
+                        fontSize: 13,
+                      }}
+                    />
+                    {(["yellow", "pink", "green"] as BoardStyle[]).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setBoardStyle(s)}
+                        aria-label={`${s} board`}
+                        aria-pressed={boardStyle === s}
+                        className={`ed-swatch${boardStyle === s ? " on" : ""}`}
+                        style={{ background: BOARD_SWATCH[s] }}
+                      />
+                    ))}
+                    <button
+                      onClick={addTextBoard}
+                      disabled={!boardText.trim()}
+                      className="ed-btn"
+                      style={{ opacity: boardText.trim() ? 1 : 0.45 }}
+                    >
+                      ADD
+                    </button>
+                  </div>
+                )}
+
                 <span className="hint">{TOOL_HINTS[railTool]}</span>
               </div>
 
@@ -563,13 +620,31 @@ export default function Page() {
 
 const PEN_COLORS = ["#123c2b", "#f5f0e0", "#cf3550", "#f2d21f", "#4a9fd4", "#e2782a"];
 
-type RailTool = "photo" | "camera" | "crop" | "stickers" | "pen" | "eraser" | "move" | "undo" | "delete";
+/** Swatch colours for the sign-board styles, matching lib/goaStickers. */
+const BOARD_SWATCH: Record<BoardStyle, string> = {
+  yellow: "#f4d913",
+  pink: "#ec1876",
+  green: "#0b5c39",
+};
+
+type RailTool =
+  | "photo"
+  | "camera"
+  | "crop"
+  | "stickers"
+  | "name"
+  | "pen"
+  | "eraser"
+  | "move"
+  | "undo"
+  | "delete";
 
 const TOOLS: { id: RailTool; name: string; glyph: string }[] = [
   { id: "photo", name: "PHOTO", glyph: "▣" },
   { id: "camera", name: "CAMERA", glyph: "◉" },
   { id: "crop", name: "CROP", glyph: "✂" },
   { id: "stickers", name: "STICKERS", glyph: "☺" },
+  { id: "name", name: "NAME", glyph: "T" },
   { id: "pen", name: "PEN", glyph: "✎" },
   { id: "eraser", name: "ERASER", glyph: "▭" },
   { id: "move", name: "MOVE", glyph: "✥" },
@@ -582,6 +657,7 @@ const TOOL_HINTS: Record<RailTool, string> = {
   camera: "Snap a photo with your camera",
   crop: "Drag to reframe your photo",
   stickers: "Tap a sticker to drop it on the frame",
+  name: "Type a name or your stack, then drop it on as a sign board",
   pen: "Drag to doodle on the frame",
   eraser: "Scrub over a doodle to rub it out",
   move: "Drag photos, stickers and doodles around",
