@@ -72,40 +72,51 @@ const BOARD_STYLES: Record<BoardStyle, { fill: string; ink: string }> = {
  * board without measuring text.
  */
 export function makeBadgeBoard(name: string, stack: string, title: string, style: BoardStyle = "yellow"): string {
-  const nameLine = (name.trim().toUpperCase() || "YOUR NAME").slice(0, 24);
-  const stackLine = (stack.trim().toUpperCase() || "STACK / ROLE").slice(0, 28);
-  const titleLine = (title.trim().toUpperCase() || "").slice(0, 28);
   const { fill, ink } = BOARD_STYLES[style];
 
-  const nameSize = 46;
-  const subSize = 24;
-  const advance = 0.6; // Space Mono character width, as a share of font size
-  const widest = Math.max(
-    nameLine.length * nameSize * advance,
-    stackLine.length * subSize * advance,
-    titleLine.length * subSize * advance
-  );
-  const padding = 46;
-  const vbW = Math.max(300, Math.round(widest + padding * 2));
-  const vbH = titleLine ? 200 : 160;
-  const inset = 18;
-  const cx = vbW / 2;
+  /* Fixed box. Sizing the strip to its contents meant it grew and shrank as
+     the user typed, so it never sat the same way twice and a long stack could
+     run wider than the photo. The plate is now always the same rectangle and
+     the text shrinks to fit its half instead. */
+  const vbW = 840;
+  const vbH = 76;
+  const padX = 26;
+  const gap = 18;
+  const nameZone = 300;
+  const dividerX = padX + nameZone + gap;
+  const subX = dividerX + gap;
+  const subZone = vbW - subX - padX;
 
-  const lines =
-    `<text x="${cx}" y="82" text-anchor="middle" font-family="${MONO}" font-size="${nameSize}" font-weight="700" fill="${ink}">${escapeXml(nameLine)}</text>` +
-    `<text x="${cx}" y="122" text-anchor="middle" font-family="${MONO}" font-size="${subSize}" font-weight="700" fill="${ink}" opacity="0.8">${escapeXml(stackLine)}</text>` +
-    (titleLine
-      ? `<rect x="${inset + 14}" y="142" width="${vbW - (inset + 14) * 2}" height="42" rx="6" fill="${PINK}" stroke="${INK}" stroke-width="4"/>` +
-        `<text x="${cx}" y="171" text-anchor="middle" font-family="${MONO}" font-size="${subSize}" font-weight="700" fill="${CREAM}">${escapeXml(titleLine)}</text>`
-      : "");
+  const advance = 0.6; // Space Mono character width, as a share of font size
+  const minSize = 11;
+  /* Shrink to fit, and only clip once the text would go under the minimum
+     readable size — a fixed character cap chopped names and stacks mid-word
+     while there was still room to make them smaller. */
+  const clamp = (text: string, zone: number) => {
+    const maxChars = Math.floor(zone / (minSize * advance));
+    return text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text;
+  };
+  const fit = (text: string, zone: number, max: number) =>
+    Math.max(minSize, Math.min(max, zone / Math.max(text.length, 1) / advance));
+
+  const nameText = clamp(name.trim().toUpperCase() || "YOUR NAME", nameZone);
+  const sub = clamp(
+    [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  "),
+    subZone
+  );
+  const nameSize = fit(nameText, nameZone, 32);
+  const subSize = fit(sub, subZone, 20);
 
   return svgToDataUrl(
     svg(
       vbW,
       vbH,
-      `<rect x="6" y="6" width="${vbW - 12}" height="${vbH - 12}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="8"/>` +
-        `<rect x="${inset + 6}" y="${inset + 6}" width="${vbW - (inset + 6) * 2}" height="${vbH - (inset + 6) * 2}" rx="3" fill="none" stroke="${CREAM}" stroke-width="3"/>` +
-        lines
+      `<rect x="4" y="4" width="${vbW - 8}" height="${vbH - 8}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="6"/>` +
+        `<text x="${padX}" y="${vbH / 2 + nameSize * 0.34}" font-family="${MONO}" font-size="${nameSize.toFixed(1)}" font-weight="700" fill="${ink}">${escapeXml(nameText)}</text>` +
+        (sub
+          ? `<rect x="${dividerX}" y="${vbH / 2 - 16}" width="3" height="32" fill="${ink}" opacity="0.45"/>` +
+            `<text x="${subX}" y="${vbH / 2 + subSize * 0.34}" font-family="${MONO}" font-size="${subSize.toFixed(1)}" font-weight="700" fill="${ink}" opacity="0.85">${escapeXml(sub)}</text>`
+          : "")
     )
   );
 }

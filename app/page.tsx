@@ -56,6 +56,7 @@ export default function Page() {
   const [railTool, setRailTool] = useState<RailTool>("move");
   const [boardStyle, setBoardStyle] = useState<BoardStyle>("yellow");
   const [titleNudge, setTitleNudge] = useState(0);
+  const [finishTries, setFinishTries] = useState(0);
   /** The auto-placed nameplate, tracked so edits update it instead of stacking copies. */
   const badgeIdRef = useRef<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -125,6 +126,8 @@ export default function Page() {
   /* The badge is the deliverable, so name and stack are required before the
      card can be finished — the brief asks for a badge, not a bare frame. */
   const detailsMissing = !builderName.trim() || !builderStack.trim();
+  const finishNudge =
+    finishTries && detailsMissing ? FINISH_NUDGES[(finishTries - 1) % FINISH_NUDGES.length] : null;
 
   /* The nameplate places itself as soon as both fields are filled and follows
      every keystroke after that, so the details can't be typed and then left
@@ -149,24 +152,21 @@ export default function Page() {
         }
         const newId = nanoid(6);
         badgeIdRef.current = newId;
-        const targetPx = CW * 0.46;
+        /* Sits along the bottom of the photo window like a caption, rather
+           than in the middle of the user's face. */
+        const slot = layout?.slots[0];
+        const scale = (CW * 0.52) / Math.max(img.width, img.height, 1);
+        const stripH = img.height * scale;
+        const x = slot ? (slot.x + slot.w / 2) * CW : CW / 2;
+        const y = slot ? (slot.y + slot.h) * CH - stripH / 2 - CH * 0.03 : CH * 0.7;
         return [
           ...prev,
-          {
-            id: newId,
-            kind: "image" as const,
-            src: url,
-            imgEl: img,
-            x: CW / 2,
-            y: CH * 0.63,
-            scale: targetPx / Math.max(img.width, img.height, 1),
-            rotation: 0,
-          },
+          { id: newId, kind: "image" as const, src: url, imgEl: img, x, y, scale, rotation: 0 },
         ];
       });
     };
     img.src = url;
-  }, [builderName, builderStack, builderTitle, boardStyle, detailsMissing, CW, CH]);
+  }, [builderName, builderStack, builderTitle, boardStyle, detailsMissing, CW, CH, layout]);
 
   /* Straight to the cropper: the on-frame window is small and nobody found the
      drag-to-reposition, so framing happens once, large, before it lands. */
@@ -624,12 +624,21 @@ export default function Page() {
               </div>
 
               <div className="ed-foot">
-                <span style={{ fontSize: 12, letterSpacing: "0.06em", opacity: 0.85 }}>
-                  {!photos.every((p) => p.image)
-                    ? "Tap an empty slot to add a photo"
-                    : detailsMissing
-                      ? "Add your name and stack in NAME to finish"
-                      : "Looking good · drag your nameplate anywhere"}
+                <span
+                  style={{
+                    fontSize: 12,
+                    letterSpacing: "0.06em",
+                    opacity: finishNudge ? 1 : 0.85,
+                    color: finishNudge ? "#f2d21f" : undefined,
+                    fontWeight: finishNudge ? 700 : undefined,
+                  }}
+                >
+                  {finishNudge ??
+                    (!photos.every((p) => p.image)
+                      ? "Tap an empty slot to add a photo"
+                      : detailsMissing
+                        ? "Add your name and stack in NAME to finish"
+                        : "Looking good · drag your nameplate anywhere")}
                 </span>
                 <button className="ed-btn" style={{ marginLeft: "auto" }} onClick={() => setStep(0)}>
                   BACK
@@ -638,6 +647,7 @@ export default function Page() {
                   className="ed-btn primary"
                   onClick={() => {
                     if (detailsMissing) {
+                      setFinishTries((n) => n + 1);
                       runTool("name");
                       return;
                     }
@@ -692,6 +702,15 @@ export default function Page() {
 const PEN_COLORS = ["#123c2b", "#f5f0e0", "#cf3550", "#f2d21f", "#4a9fd4", "#e2782a"];
 
 /** Swatch colours for the sign-board styles, matching lib/goaStickers. */
+/* Shown when someone hits FINISH with the badge still blank. Cycles so a
+   second try doesn't just repeat itself. */
+const FINISH_NUDGES = [
+  "Arre, no name no fame — fill it in first 🌴",
+  "Susegad is fine, but a badge needs a name.",
+  "Even the scooter has a name. Add yours 🛵",
+  "Nameless badge? Not very ship-or-ship.",
+];
+
 const detailInput: React.CSSProperties = {
   width: 150,
   padding: "7px 10px",
