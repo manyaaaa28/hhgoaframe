@@ -48,7 +48,10 @@ export async function shareToX({
 }: {
   dataUrl: string;
   filename: string;
-  caption: string;
+  /** Given the link to put in the post, returns the finished post text. The
+   *  link is the card page when one was uploaded — it shows the graphic and
+   *  carries the "make your own" button — and the site itself otherwise. */
+  caption: (link: string) => string;
 }): Promise<ShareResult> {
   if (!dataUrl) return { note: "Nothing to share yet — add a photo first." };
 
@@ -61,7 +64,7 @@ export async function shareToX({
 
     if (native) {
       try {
-        await navigator.share({ files: [file], text: caption });
+        await navigator.share({ files: [file], text: caption(location.origin) });
         return { note: null };
       } catch (err) {
         // A cancelled share sheet is a decision, not a failure — don't then go
@@ -87,7 +90,9 @@ export async function shareToX({
     const data = await res.json().catch(() => ({}));
 
     if (res.ok && data.cardUrl) {
-      const tweet = intent(caption, data.cardUrl);
+      // The link is already in the text, so no separate url param — X would
+      // render it twice.
+      const tweet = intent(caption(data.cardUrl));
       return { note: open(popup, tweet), composerUrl: tweet };
     }
 
@@ -98,7 +103,7 @@ export async function shareToX({
        image on the clipboard (Firefox before 127, Safari after an await). */
     const copied = await copyImage(blob);
     if (!copied) saveFile(dataUrl, filename);
-    const tweet = intent(caption);
+    const tweet = intent(caption(location.origin));
     const blocked = open(popup, tweet);
     return {
       note:

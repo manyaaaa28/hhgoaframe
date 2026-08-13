@@ -370,12 +370,26 @@ export default function Page() {
   async function shareToX() {
     setBusy(true);
     setShare(null);
-    /* Name and title are required to reach this screen, so the caption always
-       carries the badge's own details rather than a generic line. */
+    /* Name, stack and title are required to reach this screen, so the post
+       reads as a badge rather than a generic line — and it ends on a link to
+       the tool, so anyone who sees it can make their own. */
     const who = builderName.trim();
-    const caption =
-      `${who ? `${who} \u2014 ` : ""}${builderTitle}. ` +
-      `Locked in for HH Goa 2026 \u{1F334} #FrameInGoa #HHGOA2026`;
+    const stack = builderStack.trim();
+    const caption = (link: string) =>
+      [
+        "\u{1F334} Locked in for Hacker House Goa 2026!",
+        "",
+        `\u{1F464} ${who}`,
+        `\u{1F4BB} ${stack}`,
+        `\u{2728} ${builderTitle}`,
+        "",
+        "Building by the beach with the best in Goa \u{1F680}",
+        "",
+        "Make your own frame:",
+        link,
+        "",
+        "#FrameInGoa #HHGOA2026",
+      ].join("\n");
     // Runs synchronously up to its first await, so the intent window it opens
     // still counts as user-initiated and survives the popup blocker.
     const result = await shareImageToX({
