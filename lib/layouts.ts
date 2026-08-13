@@ -25,11 +25,11 @@ export type LayoutTemplate = {
 export const HH_FRAME_W = 1400;
 export const HH_FRAME_H = 1008;
 
-/* One layout per team size, all of them the real HH Goa frame. The old
-   "classic" plain-green frames were generic badges with a logo on them, which
-   is exactly what this tool is not for. */
+/* One photo, one frame — the real HH Goa artwork. The old "classic" plain-green
+   frames were generic badges with a logo on them, which is exactly what this
+   tool is not for, and the 2/3-person variants went with the squad picker. */
 export const LAYOUTS: LayoutTemplate[] = [
-  // --- HACKER HOUSE EXACT FRAME: SOLO (1-slot, pixel-aligned inside central white rounded frame) ---
+  // Solo: 1 slot, pixel-aligned inside the frame's central white rounded window.
   {
     id: "hacker-house-exact",
     label: "Hacker गोव House",
@@ -39,34 +39,6 @@ export const LAYOUTS: LayoutTemplate[] = [
     canvasHeight: HH_FRAME_H,
     slots: [{ x: 0.2310, y: 0.2200, w: 0.5427, h: 0.5280, shape: "rect" }],
   },
-  // --- HACKER HOUSE EXACT FRAME: DUO (2 vertical columns inside central frame) ---
-  {
-    id: "hacker-house-exact-2p",
-    label: "Hacker गोव House",
-    teamSize: 2,
-    frameTheme: "hacker-house",
-    canvasWidth: HH_FRAME_W,
-    canvasHeight: HH_FRAME_H,
-    slots: [
-      { x: 0.2310, y: 0.2200, w: 0.2619, h: 0.5280, shape: "rect" },
-      { x: 0.5119, y: 0.2200, w: 0.2619, h: 0.5280, shape: "rect" },
-    ],
-  },
-  // --- HACKER HOUSE EXACT FRAME: TRIO (1 wide top + 2 narrow bottom) ---
-  {
-    id: "hacker-house-exact-3p",
-    label: "Hacker गोव House",
-    teamSize: 3,
-    frameTheme: "hacker-house",
-    canvasWidth: HH_FRAME_W,
-    canvasHeight: HH_FRAME_H,
-    slots: [
-      { x: 0.2310, y: 0.2200, w: 0.5427, h: 0.2400, shape: "rect" },
-      { x: 0.2310, y: 0.4738, w: 0.2619, h: 0.2720, shape: "rect" },
-      { x: 0.5119, y: 0.4738, w: 0.2619, h: 0.2720, shape: "rect" },
-    ],
-  },
-
 ];
 
 export const CANVAS_SIZE = 1080;

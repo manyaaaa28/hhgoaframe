@@ -36,7 +36,6 @@ function generateBuilderClass(stacks: string[]): string {
 
 export default function Page() {
   const [step, setStep] = useState(0);
-  const [teamSize, setTeamSize] = useState<1 | 2 | 3 | null>(null);
   const [layout, setLayout] = useState<LayoutTemplate | null>(null);
   const [photos, setPhotos] = useState<PhotoState[]>([]);
   const [activeSlot, setActiveSlot] = useState<number | null>(null);
@@ -100,22 +99,16 @@ export default function Page() {
     };
   }, [step, CW, CH]);
 
-  function pickTeamSize(n: 1 | 2 | 3) {
-    setTeamSize(n);
-    setNames(Array(n).fill(""));
-    setStacks(Array(n).fill(""));
-    // Every team size has exactly one frame now, so a picker with a single
-    // card is just an extra tap between the user and their photo.
-    const options = layoutsForSize(n);
-    if (options.length === 1) pickLayout(options[0]);
-    else setStep(1);
-  }
-
-  function pickLayout(l: LayoutTemplate) {
-    setLayout(l);
-    setPhotos(Array.from({ length: l.slots.length }, emptyPhoto));
+  /* One frame, one photo: the landing button goes straight to the editor so
+     nothing sits between the user and their picture. */
+  function startSolo() {
+    const solo = layoutsForSize(1)[0];
+    setNames([""]);
+    setStacks([""]);
+    setLayout(solo);
+    setPhotos(Array.from({ length: solo.slots.length }, emptyPhoto));
     setActiveSlot(0);
-    setStep(2);
+    setStep(1);
   }
 
   /* Straight to the cropper: the on-frame window is small and nobody found the
@@ -231,7 +224,7 @@ export default function Page() {
       const targetPx = CW * STICKER_SIZE_RATIO;
       const scale = targetPx / Math.max(img.width, img.height, 1);
       setStickers((prev) => {
-        const spot = at ?? cascadeDrop(prev.length, CW / 2, CH / 2, CW);
+        const spot = at ?? cascadeDrop(prev, CW / 2, CH / 2, CW, CH);
         return [
           ...prev,
           {
@@ -329,19 +322,11 @@ export default function Page() {
 
   return (
     <main style={{ minHeight: "100dvh", padding: "20px 16px 60px", maxWidth: 1400, margin: "0 auto" }}>
-      {step !== 2 && <Header step={step} />}
+      {step !== 1 && <Header step={step} />}
 
-      {step === 0 && <StepTeamSize onPick={pickTeamSize} />}
+      {step === 0 && <StepStart onStart={startSolo} />}
 
-      {step === 1 && teamSize && (
-        <StepLayout
-          teamSize={teamSize}
-          onPick={pickLayout}
-          onBack={() => setStep(0)}
-        />
-      )}
-
-      {step === 2 && layout && (
+      {step === 1 && layout && (
         <div className="ed-shell">
           <input
             ref={fileInputRef}
@@ -525,7 +510,7 @@ export default function Page() {
                   className="ed-btn primary"
                   onClick={() => {
                     exportImage();
-                    setStep(3);
+                    setStep(2);
                   }}
                   disabled={photos.some((p) => !p.image)}
                 >
@@ -537,13 +522,13 @@ export default function Page() {
         </div>
       )}
 
-      {step === 3 && (
+      {step === 2 && (
         <StepShare
           exportedUrl={exportedUrl}
           busy={busy}
           onDownload={download}
           onShare={shareToX}
-          onBack={() => setStep(2)}
+          onBack={() => setStep(1)}
           note={shareNote}
         />
       )}
@@ -686,7 +671,7 @@ const inputStyle: React.CSSProperties = {
 function StepDots({ step, dark = false }: { step: number; dark?: boolean }) {
   return (
     <div style={{ display: "flex", gap: 6 }}>
-      {[0, 1, 2].map((i) => (
+      {[0, 1].map((i) => (
         <div
           key={i}
           style={{
@@ -739,14 +724,7 @@ function Header({ step }: { step: number }) {
   );
 }
 
-function StepTeamSize({ onPick }: { onPick: (n: 1 | 2 | 3) => void }) {
-  const TEAM_OPTIONS = [
-    { n: 1 as const, title: "1 Solo", desc: "Just you, front and center" },
-    { n: 2 as const, title: "2 Builders", desc: "Side-by-side duo layout" },
-    { n: 3 as const, title: "3 Builders", desc: "Trio grid layout" },
-  ];
-  const [hover, setHover] = useState<number | null>(null);
-
+function StepStart({ onStart }: { onStart: () => void }) {
   return (
     <>
       <section className="hero-grid" style={{ margin: "0 auto 56px" }}>
@@ -770,16 +748,9 @@ function StepTeamSize({ onPick }: { onPick: (n: 1 | 2 | 3) => void }) {
             Drop in a photo, we wrap it in the real event badge. Ready to set as your X profile picture in one tap.
           </p>
           <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-            <button className="pill-btn" onClick={() => onPick(1)}>
+            <button className="pill-btn" onClick={onStart}>
               Upload your photo →
             </button>
-            <Link
-              href="/id"
-              className="mono"
-              style={{ fontSize: 13, color: "#f6f0dec0", textUnderlineOffset: 4 }}
-            >
-              or build a Builder ID card instead
-            </Link>
           </div>
         </div>
 
@@ -898,229 +869,7 @@ function StepTeamSize({ onPick }: { onPick: (n: 1 | 2 | 3) => void }) {
           </div>
         </div>
       </section>
-
-      <Link
-        href="/id"
-        className="mono"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          textDecoration: "none",
-          background: "#f6f0de0f",
-          border: "1px solid #f6f0de40",
-          borderRadius: 12,
-          padding: "14px 18px",
-          color: "var(--hh-cream)",
-          maxWidth: 560,
-          margin: "0 0 18px",
-        }}
-      >
-        <span style={{ fontSize: 18 }}>🪪</span>
-        <span style={{ fontSize: 13, lineHeight: 1.5 }}>
-          <strong style={{ color: "var(--hh-yellow)" }}>Going solo?</strong> Try the Builder ID Card: photo, name
-          &amp; stack on one badge →
-        </span>
-      </Link>
-
-      <div className="note-card">
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 10,
-            marginBottom: 6,
-          }}
-        >
-          <div className="eyebrow" style={{ color: "#0b5c3999" }}>Step 1 / 3</div>
-          <StepDots step={0} dark />
-        </div>
-        <h2 className="display" style={{ fontWeight: 800, fontSize: 26, margin: "2px 0 6px" }}>
-          How many builders?
-        </h2>
-        <p className="mono" style={{ fontSize: 13, color: "#0b5c3999", margin: "0 0 22px" }}>
-          HH Goa teams run 1–3 people. Pick your squad size, each has its own frame layout.
-        </p>
-
-        <div className="team-grid">
-          {TEAM_OPTIONS.map((opt) => {
-            const on = hover === opt.n;
-            return (
-              <button
-                key={opt.n}
-                onClick={() => onPick(opt.n)}
-                onMouseEnter={() => setHover(opt.n)}
-                onMouseLeave={() => setHover(null)}
-                className="mono"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  textAlign: "left",
-                  padding: "20px 16px",
-                  borderRadius: 14,
-                  border: `2px solid ${on ? "#f4d913" : "#0b5c3922"}`,
-                  background: on ? "#f4d9131a" : "#ffffffb0",
-                  color: "var(--hh-green-dark)",
-                  cursor: "pointer",
-                  transition: "all .15s",
-                  transform: on ? "translateY(-3px)" : "none",
-                  boxShadow: on ? "0 10px 0 -4px rgba(11,92,57,.15), 0 16px 26px rgba(0,0,0,.18)" : "none",
-                }}
-              >
-                <div className="display" style={{ fontSize: 22, marginBottom: 10, fontWeight: 800 }}>
-                  {opt.n}
-                </div>
-                <div className="display" style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
-                  {opt.title}
-                </div>
-                <div style={{ fontSize: 11, color: "#0b5c3980" }}>{opt.desc}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
     </>
-  );
-}
-
-function StepLayout({
-  teamSize,
-  onPick,
-  onBack,
-}: {
-  teamSize: 1 | 2 | 3;
-  onPick: (l: LayoutTemplate) => void;
-  onBack: () => void;
-}) {
-  const options = layoutsForSize(teamSize);
-  return (
-    <div className="note-card">
-      <div className="eyebrow">Pick your frame</div>
-      <h2 className="display" style={{ margin: "6px 0 4px", fontSize: 22 }}>
-        Pick your frame
-      </h2>
-      <p className="mono" style={{ fontSize: 13, opacity: 0.75, margin: "0 0 18px" }}>
-        Choose the exact frame style you want.
-      </p>
-      <div style={{ display: "grid", gridTemplateColumns: options.length > 2 ? "1fr 1fr" : "1fr", gap: 14 }}>
-        {options.map((l) => {
-          const isHH = l.frameTheme === "hacker-house";
-          const cw = l.canvasWidth ?? 1080;
-          const ch = l.canvasHeight ?? 1080;
-          const ar = isHH ? `${cw} / ${ch}` : "1 / 1";
-          return (
-            <button
-              key={l.id}
-              onClick={() => onPick(l)}
-              style={{
-                border: isHH ? "3px solid #f4d913" : "2px solid #0b5c3933",
-                borderRadius: 12,
-                padding: 10,
-                background: "#ffffffaa",
-                cursor: "pointer",
-                gridColumn: isHH ? options.length > 2 ? "1 / -1" : undefined : undefined,
-              }}
-            >
-              <div
-                style={{
-                  position: "relative",
-                  width: "100%",
-                  aspectRatio: ar,
-                  background: isHH
-                    ? "#f6f0de"
-                    : "#0b5c39",
-                  borderRadius: 8,
-                  overflow: "hidden",
-                }}
-              >
-                {isHH ? (
-                  <>
-                    <img
-                      src="/hh-memories-frame.webp"
-                      alt="Hacker House Frame"
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                      }}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                    {l.slots.map((s, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          position: "absolute",
-                          left: `${s.x * 100}%`,
-                          top: `${s.y * 100}%`,
-                          width: `${s.w * 100}%`,
-                          height: `${s.h * 100}%`,
-                          background: "#0c0c0c55",
-                          border: "2px solid #f4d913",
-                          borderRadius: 6,
-                          boxSizing: "border-box",
-                        }}
-                      />
-                    ))}
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: 10,
-                        bottom: 10,
-                        fontSize: "0.6em",
-                        color: "#0b5c39",
-                        background: "#f6f0de",
-                        padding: "2px 6px",
-                        borderRadius: 999,
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      🌴🏍💻 EXACT
-                    </div>
-                  </>
-                ) : (
-                  l.slots.map((s, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        position: "absolute",
-                        left: `${s.x * 100}%`,
-                        top: `${s.y * 100}%`,
-                        width: `${s.w * 100}%`,
-                        height: `${s.h * 100}%`,
-                        background: "#f4d91355",
-                        border: "1.5px solid #f4d913",
-                        borderRadius: s.shape === "notch" ? 4 : 6,
-                      }}
-                    />
-                  ))
-                )}
-              </div>
-              <div
-                className="mono"
-                style={{
-                  fontSize: 12,
-                  marginTop: 8,
-                  color: isHH ? "#a03820" : "#0b5c39",
-                  fontWeight: 700,
-                }}
-              >
-                {l.label}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-      <button className="pill-btn ghost" onClick={onBack} style={{ marginTop: 18 }}>
-        Back
-      </button>
-    </div>
   );
 }
 
@@ -1141,7 +890,7 @@ function StepShare({
 }) {
   return (
     <div className="note-card">
-      <div className="eyebrow">Step 3 / 3</div>
+      <div className="eyebrow">Step 2 / 2</div>
       <h2 className="display" style={{ margin: "6px 0 14px", fontSize: 22 }}>
         You&apos;re framed 🌴
       </h2>
