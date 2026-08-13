@@ -80,12 +80,11 @@ export function makeBadgeBoard(name: string, stack: string, title: string, style
      the text shrinks to fit its half instead. */
   const vbW = 840;
   const vbH = 76;
-  const divW = 3;
-  const advance = 0.6; // Space Mono character width, as a share of font size
+  const advance = 0.62; // mono character width, as a share of font size
   const width = (text: string, size: number) => text.length * size * advance;
 
   const nameText = name.trim().toUpperCase() || "YOUR NAME";
-  let sub = [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  ");
+  let sub = [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  ");
 
   /* Name and role share one type size — set smaller than the name, the role
      was unreadable once the plate sat on the frame.
@@ -100,50 +99,55 @@ export function makeBadgeBoard(name: string, stack: string, title: string, style
      bottom still had room, which reads as lopsided rather than tight. */
   const PAD_MAX = 26;
   const PAD_MIN = 16;
-  const GAP_MAX = 16;
-  const GAP_MIN = 7;
   const maxSize = 34;
   const minSize = 12;
 
-  const needed = (size: number, gap: number) =>
-    width(nameText, size) + (sub ? gap * 2 + divW : 0) + width(sub, size);
+  /* Name and role sit in one <text> anchored at the middle, so the renderer
+     centres the whole line itself. Placing each half from a measured width
+     can't work here: this SVG is loaded through an <img>, which can't reach
+     the page's Space Mono, so it falls back to a system mono whose glyphs are
+     narrower than any estimate — the line then rendered shorter than the
+     model and the leftover space all landed on the right.
 
-  let size = maxSize;
+     Separators use non-breaking spaces because SVG collapses ordinary
+     whitespace between tspans. */
+  const SEP_WIDE = "  |  ";
+  const SEP_TIGHT = " | ";
+
   let padX = PAD_MAX;
-  let gap = GAP_MAX;
-  if (needed(size, gap) > vbW - padX * 2) gap = GAP_MIN;
-  if (needed(size, gap) > vbW - padX * 2) padX = PAD_MIN;
-  if (needed(size, gap) > vbW - padX * 2) {
-    const avail = vbW - padX * 2 - (sub ? gap * 2 + divW : 0);
-    size = Math.max(minSize, avail / Math.max(nameText.length + sub.length, 1) / advance);
+  let sep = sub ? SEP_WIDE : "";
+  const lineLen = () => nameText.length + sep.length + sub.length;
+  const fits = (size: number) => width("x".repeat(lineLen()), size) <= vbW - padX * 2;
+
+  /* Spend the spacing before the type size: separator first, then padding,
+     and only then shrink the text. */
+  let size = maxSize;
+  if (!fits(size) && sub) sep = SEP_TIGHT;
+  if (!fits(size)) padX = PAD_MIN;
+  if (!fits(size)) {
+    size = Math.max(minSize, (vbW - padX * 2) / Math.max(lineLen(), 1) / advance);
   }
-  const nameSize = size;
-  const subSize = size;
 
-  const nameW = width(nameText, nameSize);
   // Still over at the smallest readable size: trim the role, never the name.
-  const room = vbW - padX * 2 - nameW - (sub ? gap * 2 + divW : 0);
-  // 1px of slack: without it the rounding clipped a character off text that
-  // had just been sized to fit exactly.
-  const maxSubChars = Math.max(0, Math.floor((room + 1) / (subSize * advance)));
-  if (sub.length > maxSubChars) sub = maxSubChars > 1 ? sub.slice(0, maxSubChars - 1) + "…" : "";
+  const maxLineChars = Math.floor((vbW - padX * 2 + 1) / (size * advance));
+  const overBy = lineLen() - maxLineChars;
+  if (overBy > 0 && sub) sub = sub.length > overBy + 1 ? sub.slice(0, sub.length - overBy - 1) + "…" : "…";
 
-  const subW = width(sub, subSize);
-  const block = nameW + (sub ? gap + divW + gap + subW : 0);
-  const x0 = (vbW - block) / 2;
-  const dividerX = x0 + nameW + gap;
-  const subX = dividerX + divW + gap;
+  const baseline = vbH / 2 + size * 0.34;
+  const body =
+    `<text x="${vbW / 2}" y="${baseline.toFixed(1)}" text-anchor="middle" font-family="${MONO}" ` +
+    `font-size="${size.toFixed(1)}" font-weight="700" fill="${ink}">` +
+    `<tspan>${escapeXml(nameText)}</tspan>` +
+    (sub
+      ? `<tspan opacity="0.5">${escapeXml(sep)}</tspan><tspan opacity="0.85">${escapeXml(sub)}</tspan>`
+      : "") +
+    `</text>`;
 
   return svgToDataUrl(
     svg(
       vbW,
       vbH,
-      `<rect x="4" y="4" width="${vbW - 8}" height="${vbH - 8}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="6"/>` +
-        `<text x="${x0.toFixed(1)}" y="${vbH / 2 + nameSize * 0.34}" font-family="${MONO}" font-size="${nameSize.toFixed(1)}" font-weight="700" fill="${ink}">${escapeXml(nameText)}</text>` +
-        (sub
-          ? `<rect x="${dividerX.toFixed(1)}" y="${vbH / 2 - 16}" width="${divW}" height="32" fill="${ink}" opacity="0.45"/>` +
-            `<text x="${subX.toFixed(1)}" y="${vbH / 2 + subSize * 0.34}" font-family="${MONO}" font-size="${subSize.toFixed(1)}" font-weight="700" fill="${ink}" opacity="0.85">${escapeXml(sub)}</text>`
-          : "")
+      `<rect x="4" y="4" width="${vbW - 8}" height="${vbH - 8}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="6"/>` + body
     )
   );
 }
