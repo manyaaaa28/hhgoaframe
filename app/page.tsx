@@ -375,7 +375,7 @@ export default function Page() {
     const who = builderName.trim();
     const caption =
       `${who ? `${who} \u2014 ` : ""}${builderTitle}. ` +
-      `Locked in for HH Goa 2026 \u{1F334} #FrameInGoa`;
+      `Locked in for HH Goa 2026 \u{1F334} #FrameInGoa #HHGOA2026`;
     // Runs synchronously up to its first await, so the intent window it opens
     // still counts as user-initiated and survives the popup blocker.
     const result = await shareImageToX({
@@ -967,7 +967,7 @@ function StepStart({ onStart }: { onStart: () => void }) {
                 </div>
               </div>
               <div className="mono" style={{ fontSize: 13, color: "var(--hh-green)", marginBottom: 12, lineHeight: 1.5 }}>
-                Locked in for HH Goa 2026 🌴 #FrameInGoa
+                Locked in for HH Goa 2026 🌴 #FrameInGoa #HHGOA2026
               </div>
               <div
                 style={{
