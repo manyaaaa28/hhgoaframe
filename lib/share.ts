@@ -71,23 +71,46 @@ export async function shareToX({
     }
 
     /* No blob store configured (or the upload failed). Rather than dead-ending,
-       save the PNG and open the composer with the caption ready — the user just
-       drags the file in. A working share beats an error message. */
-    saveFile(dataUrl, filename);
+       put the image on the clipboard so attaching it is one paste, and open the
+       composer with the caption already in it. A working share beats an error
+       message. Downloading is the backstop for browsers that won't take an
+       image on the clipboard (Firefox before 127, Safari after an await). */
+    const copied = await copyImage(blob);
+    if (!copied) saveFile(dataUrl, filename);
     const tweet = intent(caption);
     if (popup && !popup.closed) popup.location.href = tweet;
     else window.open(tweet, "_blank");
-    return "Image saved to your downloads — attach it to the tweet we just opened.";
+    return copied
+      ? "Image copied — press ⌘V / Ctrl+V in the post to attach it."
+      : "Image saved to your downloads — attach it to the post we just opened.";
   } catch {
     popup?.close();
     return "Couldn't prepare the image. Download it and attach it on X manually.";
   }
 }
 
+/* The composer of whoever is signed in on that device — so everyone posts from
+   their own account, we never touch it. x.com/intent/post is the current
+   canonical form: twitter.com/intent/tweet still works but redirects, and the
+   extra hop is where mobile browsers sometimes drop the prefilled text. */
 function intent(caption: string, url?: string) {
   const q = new URLSearchParams({ text: caption });
   if (url) q.set("url", url);
-  return `https://twitter.com/intent/tweet?${q.toString()}`;
+  return `https://x.com/intent/post?${q.toString()}`;
+}
+
+/** True if the PNG is now on the clipboard, ready to paste into the composer. */
+async function copyImage(blob: Blob): Promise<boolean> {
+  try {
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) return false;
+    // The intent window we just opened may hold focus, and a clipboard write
+    // from an unfocused document throws. Ask for it back first.
+    window.focus();
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function saveFile(dataUrl: string, filename: string) {

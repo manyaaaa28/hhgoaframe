@@ -347,12 +347,13 @@ export default function Page() {
   /* Only callable while step 2 is on screen — the EditorCanvas is unmounted at
      the share step, so the URL captured on Finish is the one we keep. */
   function exportImage(): string {
-    /* 2x the canvas. At 1x the photo window is only ~760px across, so a phone
-       photo gets thrown away down to that — and the photo is the subject. The
-       frame art is a 1400px bitmap and does get interpolated here, but that
-       costs nothing at any given display size, whereas the lost photo detail
-       is gone for good. */
-    const url = canvasRef.current?.exportPNG(CW * 2) || "";
+    /* Above 1x because at 1x the photo window is only ~760px across, so a phone
+       photo gets thrown away down to that — and the photo is the subject.
+       Capped at 2000 because X rejects images over 5MB and a full 2x export of
+       this canvas measures 5.06MB: the post would simply fail to attach. 2000
+       lands at ~3MB, still ~1090px of the user's photo, and exports in half the
+       time. The frame art is a 1400px bitmap either way. */
+    const url = canvasRef.current?.exportPNG(Math.min(CW * 2, 2000)) || "";
     if (url) setExportedUrl(url);
     return url;
   }
@@ -1102,7 +1103,17 @@ function StepShare({
         </button>
       </div>
       {note && (
-        <p className="mono" style={{ fontSize: 12, color: "#a03820", marginTop: 12 }}>
+        /* Most notes are the next step, not a failure — only the ones that
+           start with "Couldn't" have gone wrong, so only those read as red. */
+        <p
+          className="mono"
+          style={{
+            fontSize: 12,
+            color: note.startsWith("Couldn't") ? "#a03820" : "var(--hh-green)",
+            fontWeight: 600,
+            marginTop: 12,
+          }}
+        >
           {note}
         </p>
       )}
