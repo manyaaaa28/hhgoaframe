@@ -892,22 +892,22 @@ function StepShare({
   note: string | null;
 }) {
   return (
-    <div className="note-card" style={{ maxWidth: 640, margin: "0 auto" }}>
+    <div className="note-card" style={{ maxWidth: 900, margin: "0 auto" }}>
       <div className="eyebrow">Step 2 / 2</div>
       <h2 className="display" style={{ margin: "6px 0 14px", fontSize: 22 }}>
         You&apos;re framed 🌴
       </h2>
       {exportedUrl && (
-        /* Capped well under the PNG's own width: stretched to the full card the
-           preview was asking for more pixels than the file has — twice as many
-           on a retina screen — so the frame's linework came out soft. */
+        /* As large as the 1400px file can go before the browser has to invent
+           pixels. Stretched to the full card it was asking for nearly twice
+           what the file holds, which is what softened the linework. */
         <img
           src={exportedUrl}
           alt="Your HH Goa 2026 frame"
           style={{
             display: "block",
             width: "100%",
-            maxWidth: 560,
+            maxWidth: 820,
             height: "auto",
             margin: "0 auto",
             borderRadius: 14,
