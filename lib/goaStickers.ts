@@ -80,42 +80,49 @@ export function makeBadgeBoard(name: string, stack: string, title: string, style
      the text shrinks to fit its half instead. */
   const vbW = 840;
   const vbH = 76;
-  const padX = 26;
-  const gap = 18;
-  const nameZone = 300;
-  const dividerX = padX + nameZone + gap;
-  const subX = dividerX + gap;
-  const subZone = vbW - subX - padX;
-
+  const padX = 22;
+  const gap = 16;
+  const divW = 3;
   const advance = 0.6; // Space Mono character width, as a share of font size
   const minSize = 11;
-  /* Shrink to fit, and only clip once the text would go under the minimum
-     readable size — a fixed character cap chopped names and stacks mid-word
-     while there was still room to make them smaller. */
-  const clamp = (text: string, zone: number) => {
-    const maxChars = Math.floor(zone / (minSize * advance));
-    return text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text;
-  };
-  const fit = (text: string, zone: number, max: number) =>
-    Math.max(minSize, Math.min(max, zone / Math.max(text.length, 1) / advance));
+  const width = (text: string, size: number) => text.length * size * advance;
 
-  const nameText = clamp(name.trim().toUpperCase() || "YOUR NAME", nameZone);
-  const sub = clamp(
-    [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  "),
-    subZone
-  );
-  const nameSize = fit(nameText, nameZone, 32);
-  const subSize = fit(sub, subZone, 20);
+  const nameText = name.trim().toUpperCase() || "YOUR NAME";
+  let sub = [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  ");
+
+  /* The divider used to sit at a fixed offset, which left a short name like
+     MANYA marooned beside a gap half the plate wide. Both halves are measured
+     instead, shrunk together only if they overflow, then centred as one block
+     — so the spacing follows the text while the plate stays the same size. */
+  const avail = vbW - padX * 2 - (sub ? gap * 2 + divW : 0);
+  let nameSize = 32;
+  let subSize = 20;
+  const overflow = (width(nameText, nameSize) + width(sub, subSize)) / avail;
+  if (overflow > 1) {
+    nameSize = Math.max(minSize, nameSize / overflow);
+    subSize = Math.max(minSize, subSize / overflow);
+  }
+
+  const nameW = width(nameText, nameSize);
+  // Still over at the smallest readable size: trim the sub text, never the name.
+  const maxSubChars = Math.max(0, Math.floor((avail - nameW) / (subSize * advance)));
+  if (sub.length > maxSubChars) sub = maxSubChars > 1 ? sub.slice(0, maxSubChars - 1) + "…" : "";
+
+  const subW = width(sub, subSize);
+  const block = nameW + (sub ? gap + divW + gap + subW : 0);
+  const x0 = (vbW - block) / 2;
+  const dividerX = x0 + nameW + gap;
+  const subX = dividerX + divW + gap;
 
   return svgToDataUrl(
     svg(
       vbW,
       vbH,
       `<rect x="4" y="4" width="${vbW - 8}" height="${vbH - 8}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="6"/>` +
-        `<text x="${padX}" y="${vbH / 2 + nameSize * 0.34}" font-family="${MONO}" font-size="${nameSize.toFixed(1)}" font-weight="700" fill="${ink}">${escapeXml(nameText)}</text>` +
+        `<text x="${x0.toFixed(1)}" y="${vbH / 2 + nameSize * 0.34}" font-family="${MONO}" font-size="${nameSize.toFixed(1)}" font-weight="700" fill="${ink}">${escapeXml(nameText)}</text>` +
         (sub
-          ? `<rect x="${dividerX}" y="${vbH / 2 - 16}" width="3" height="32" fill="${ink}" opacity="0.45"/>` +
-            `<text x="${subX}" y="${vbH / 2 + subSize * 0.34}" font-family="${MONO}" font-size="${subSize.toFixed(1)}" font-weight="700" fill="${ink}" opacity="0.85">${escapeXml(sub)}</text>`
+          ? `<rect x="${dividerX.toFixed(1)}" y="${vbH / 2 - 16}" width="${divW}" height="32" fill="${ink}" opacity="0.45"/>` +
+            `<text x="${subX.toFixed(1)}" y="${vbH / 2 + subSize * 0.34}" font-family="${MONO}" font-size="${subSize.toFixed(1)}" font-weight="700" fill="${ink}" opacity="0.85">${escapeXml(sub)}</text>`
           : "")
     )
   );
