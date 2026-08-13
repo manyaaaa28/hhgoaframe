@@ -288,7 +288,10 @@ export default function Page() {
   /* Only callable while step 2 is on screen — the EditorCanvas is unmounted at
      the share step, so the URL captured on Finish is the one we keep. */
   function exportImage(): string {
-    const url = canvasRef.current?.exportPNG(1600) || "";
+    /* Export at the canvas's own width. The frame art is a 1400px bitmap, so
+       asking for 1600 resampled it up and softened every black outline —
+       bigger numbers, blurrier picture. */
+    const url = canvasRef.current?.exportPNG(CW) || "";
     if (url) setExportedUrl(url);
     return url;
   }
@@ -889,16 +892,27 @@ function StepShare({
   note: string | null;
 }) {
   return (
-    <div className="note-card">
+    <div className="note-card" style={{ maxWidth: 640, margin: "0 auto" }}>
       <div className="eyebrow">Step 2 / 2</div>
       <h2 className="display" style={{ margin: "6px 0 14px", fontSize: 22 }}>
         You&apos;re framed 🌴
       </h2>
       {exportedUrl && (
+        /* Capped well under the PNG's own width: stretched to the full card the
+           preview was asking for more pixels than the file has — twice as many
+           on a retina screen — so the frame's linework came out soft. */
         <img
           src={exportedUrl}
           alt="Your HH Goa 2026 frame"
-          style={{ width: "100%", borderRadius: 14, boxShadow: "0 10px 24px rgba(0,0,0,.25)" }}
+          style={{
+            display: "block",
+            width: "100%",
+            maxWidth: 560,
+            height: "auto",
+            margin: "0 auto",
+            borderRadius: 14,
+            boxShadow: "0 10px 24px rgba(0,0,0,.25)",
+          }}
         />
       )}
       <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
