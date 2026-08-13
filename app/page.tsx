@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { nanoid } from "nanoid";
 import { layoutsForSize, LayoutTemplate, CANVAS_SIZE, HH_FRAME_W, HH_FRAME_H } from "@/lib/layouts";
 import { fileToImage } from "@/lib/loadImage";
-import { GOA_STICKERS, makeTextBoard, type BoardStyle } from "@/lib/goaStickers";
+import { GOA_STICKERS, makeBadgeBoard, type BoardStyle } from "@/lib/goaStickers";
+import { generateBuilderTitle } from "@/lib/builderTitle";
 import { shareToX as shareImageToX } from "@/lib/share";
 import { cascadeDrop, STICKER_SIZE_RATIO } from "@/lib/stickerDrop";
 import CameraSheet from "@/components/CameraSheet";
@@ -53,8 +54,10 @@ export default function Page() {
   const [panel, setPanel] = useState<"stickers" | "pen" | null>(null);
   const [brush, setBrush] = useState({ color: "#cf3550", size: 18 });
   const [railTool, setRailTool] = useState<RailTool>("move");
-  const [boardText, setBoardText] = useState("");
   const [boardStyle, setBoardStyle] = useState<BoardStyle>("yellow");
+  const [titleNudge, setTitleNudge] = useState(0);
+  /** The auto-placed nameplate, tracked so edits update it instead of stacking copies. */
+  const badgeIdRef = useRef<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [shareNote, setShareNote] = useState<string | null>(null);
   const [original, setOriginal] = useState<HTMLImageElement | null>(null);
@@ -112,6 +115,58 @@ export default function Page() {
     setActiveSlot(0);
     setStep(1);
   }
+
+  const builderName = names[0] ?? "";
+  const builderStack = stacks[0] ?? "";
+  const builderTitle = useMemo(
+    () => generateBuilderTitle(builderName, builderStack, titleNudge),
+    [builderName, builderStack, titleNudge]
+  );
+  /* The badge is the deliverable, so name and stack are required before the
+     card can be finished — the brief asks for a badge, not a bare frame. */
+  const detailsMissing = !builderName.trim() || !builderStack.trim();
+
+  /* The nameplate places itself as soon as both fields are filled and follows
+     every keystroke after that, so the details can't be typed and then left
+     off the image. It's still an ordinary sticker, so it stays draggable. */
+  useEffect(() => {
+    if (detailsMissing) {
+      const id = badgeIdRef.current;
+      if (id) {
+        setStickers((prev) => prev.filter((s) => s.id !== id));
+        badgeIdRef.current = null;
+      }
+      return;
+    }
+    const url = makeBadgeBoard(builderName, builderStack, builderTitle, boardStyle);
+    const img = new window.Image();
+    img.onload = () => {
+      setStickers((prev) => {
+        const id = badgeIdRef.current;
+        if (id && prev.some((s) => s.id === id)) {
+          // Keep wherever the user dragged it; only the artwork changes.
+          return prev.map((s) => (s.id === id ? { ...s, src: url, imgEl: img } : s));
+        }
+        const newId = nanoid(6);
+        badgeIdRef.current = newId;
+        const targetPx = CW * 0.46;
+        return [
+          ...prev,
+          {
+            id: newId,
+            kind: "image" as const,
+            src: url,
+            imgEl: img,
+            x: CW / 2,
+            y: CH * 0.63,
+            scale: targetPx / Math.max(img.width, img.height, 1),
+            rotation: 0,
+          },
+        ];
+      });
+    };
+    img.src = url;
+  }, [builderName, builderStack, builderTitle, boardStyle, detailsMissing, CW, CH]);
 
   /* Straight to the cropper: the on-frame window is small and nobody found the
      drag-to-reposition, so framing happens once, large, before it lands. */
@@ -186,16 +241,6 @@ export default function Page() {
         setSelectedStickerId(null);
       }
     }
-  }
-
-  /* Boards ride the sticker pipeline, so they drag, scale and rotate with no
-     extra machinery — and they land wider than a sticker so the text reads. */
-  function addTextBoard() {
-    const text = boardText.trim();
-    if (!text) return;
-    setTool("select");
-    addImageSticker(makeTextBoard(text, boardStyle), undefined, 0.42);
-    setBoardText("");
   }
 
   function removeSelectedSticker() {
@@ -324,8 +369,12 @@ export default function Page() {
   async function shareToX() {
     setBusy(true);
     setShareNote(null);
-    const who = names.filter(Boolean);
-    const caption = `Locked in for HH Goa 2026 \u{1F334}${who.length ? ` \u2014 ${who.join(" x ")}` : ""} #FrameInGoa`;
+    /* Name and title are required to reach this screen, so the caption always
+       carries the badge's own details rather than a generic line. */
+    const who = builderName.trim();
+    const caption =
+      `${who ? `${who} \u2014 ` : ""}${builderTitle}. ` +
+      `Locked in for HH Goa 2026 \u{1F334} #FrameInGoa`;
     // Runs synchronously up to its first await, so the intent window it opens
     // still counts as user-initiated and survives the popup blocker.
     const problem = await shareImageToX({
@@ -472,42 +521,56 @@ export default function Page() {
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "none" }}>
                     <input
                       className="mono"
-                      value={boardText}
-                      onChange={(e) => setBoardText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") addTextBoard();
-                      }}
-                      placeholder="Name or stack…"
-                      maxLength={28}
-                      aria-label="Sign board text"
-                      style={{
-                        width: 190,
-                        padding: "7px 10px",
-                        borderRadius: 7,
-                        border: "2px solid #0000002e",
-                        background: "#fffdf5",
-                        color: "#123c2b",
-                        fontSize: 13,
-                      }}
+                      value={builderName}
+                      onChange={(e) => setNames([e.target.value])}
+                      placeholder="Your name *"
+                      maxLength={24}
+                      aria-label="Your name"
+                      style={detailInput}
                     />
+                    <input
+                      className="mono"
+                      value={builderStack}
+                      onChange={(e) => setStacks([e.target.value])}
+                      placeholder="Stack / role *"
+                      maxLength={28}
+                      aria-label="Your stack or role"
+                      style={detailInput}
+                    />
+                    <span
+                      className="mono"
+                      title="Your generated builder title"
+                      style={{
+                        background: "#ec1876",
+                        color: "#f6f0de",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        letterSpacing: "0.04em",
+                        padding: "7px 10px",
+                        borderRadius: 6,
+                        whiteSpace: "nowrap",
+                        opacity: detailsMissing ? 0.5 : 1,
+                      }}
+                    >
+                      {builderTitle}
+                    </span>
+                    <button
+                      onClick={() => setTitleNudge((n) => n + 1)}
+                      className="ed-btn"
+                      title="Roll a different builder title"
+                    >
+                      🎲
+                    </button>
                     {(["yellow", "pink", "green"] as BoardStyle[]).map((s) => (
                       <button
                         key={s}
                         onClick={() => setBoardStyle(s)}
-                        aria-label={`${s} board`}
+                        aria-label={`${s} nameplate`}
                         aria-pressed={boardStyle === s}
                         className={`ed-swatch${boardStyle === s ? " on" : ""}`}
                         style={{ background: BOARD_SWATCH[s] }}
                       />
                     ))}
-                    <button
-                      onClick={addTextBoard}
-                      disabled={!boardText.trim()}
-                      className="ed-btn"
-                      style={{ opacity: boardText.trim() ? 1 : 0.45 }}
-                    >
-                      ADD
-                    </button>
                   </div>
                 )}
 
@@ -562,8 +625,11 @@ export default function Page() {
 
               <div className="ed-foot">
                 <span style={{ fontSize: 12, letterSpacing: "0.06em", opacity: 0.85 }}>
-                  {photos.filter((p) => p.image).length} of {slots.length} filled
-                  {photos.every((p) => p.image) ? " · looking good" : " · tap an empty slot to add a photo"}
+                  {!photos.every((p) => p.image)
+                    ? "Tap an empty slot to add a photo"
+                    : detailsMissing
+                      ? "Add your name and stack in NAME to finish"
+                      : "Looking good · drag your nameplate anywhere"}
                 </span>
                 <button className="ed-btn" style={{ marginLeft: "auto" }} onClick={() => setStep(0)}>
                   BACK
@@ -571,10 +637,15 @@ export default function Page() {
                 <button
                   className="ed-btn primary"
                   onClick={() => {
+                    if (detailsMissing) {
+                      runTool("name");
+                      return;
+                    }
                     exportImage();
                     setStep(2);
                   }}
                   disabled={photos.some((p) => !p.image)}
+                  title={detailsMissing ? "Add your name and stack first" : undefined}
                 >
                   FINISH →
                 </button>
@@ -621,6 +692,16 @@ export default function Page() {
 const PEN_COLORS = ["#123c2b", "#f5f0e0", "#cf3550", "#f2d21f", "#4a9fd4", "#e2782a"];
 
 /** Swatch colours for the sign-board styles, matching lib/goaStickers. */
+const detailInput: React.CSSProperties = {
+  width: 150,
+  padding: "7px 10px",
+  borderRadius: 7,
+  border: "2px solid #0000002e",
+  background: "#fffdf5",
+  color: "#123c2b",
+  fontSize: 13,
+};
+
 const BOARD_SWATCH: Record<BoardStyle, string> = {
   yellow: "#f4d913",
   pink: "#ec1876",

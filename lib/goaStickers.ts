@@ -60,30 +60,52 @@ const BOARD_STYLES: Record<BoardStyle, { fill: string; ink: string }> = {
 };
 
 /**
- * A sign board carrying whatever the user typed — their name, their stack,
- * whatever. Same panel as the DAY boards, but the viewBox is sized to the text
- * instead of fixed, so a short name doesn't float in a huge board and a long
- * one doesn't overflow it. Space Mono is fixed-pitch, so character count is
- * enough to work out the width without measuring.
+ * The builder nameplate: name, stack and generated title on one sign board, in
+ * the same panel style as the DAY boards on the site.
+ *
+ * One board rather than three because it has to be laid out automatically —
+ * three separate boards would need their heights measured after load and
+ * stacked, and any of them could be dragged away from the others. As a single
+ * image it places itself, moves as a unit, and can't get half-deleted.
+ *
+ * Space Mono is fixed-pitch, so the widest line's character count sizes the
+ * board without measuring text.
  */
-export function makeTextBoard(text: string, style: BoardStyle = "yellow"): string {
-  const label = text.trim().toUpperCase().slice(0, 28) || "YOUR NAME";
+export function makeBadgeBoard(name: string, stack: string, title: string, style: BoardStyle = "yellow"): string {
+  const nameLine = (name.trim().toUpperCase() || "YOUR NAME").slice(0, 24);
+  const stackLine = (stack.trim().toUpperCase() || "STACK / ROLE").slice(0, 28);
+  const titleLine = (title.trim().toUpperCase() || "").slice(0, 28);
   const { fill, ink } = BOARD_STYLES[style];
-  const fontSize = 40;
-  const advance = fontSize * 0.6; // Space Mono's fixed character width
+
+  const nameSize = 46;
+  const subSize = 24;
+  const advance = 0.6; // Space Mono character width, as a share of font size
+  const widest = Math.max(
+    nameLine.length * nameSize * advance,
+    stackLine.length * subSize * advance,
+    titleLine.length * subSize * advance
+  );
   const padding = 46;
-  const vbW = Math.max(240, Math.round(label.length * advance + padding * 2));
-  const vbH = 112;
-  const inset = 16;
+  const vbW = Math.max(300, Math.round(widest + padding * 2));
+  const vbH = titleLine ? 200 : 160;
+  const inset = 18;
+  const cx = vbW / 2;
+
+  const lines =
+    `<text x="${cx}" y="82" text-anchor="middle" font-family="${MONO}" font-size="${nameSize}" font-weight="700" fill="${ink}">${escapeXml(nameLine)}</text>` +
+    `<text x="${cx}" y="122" text-anchor="middle" font-family="${MONO}" font-size="${subSize}" font-weight="700" fill="${ink}" opacity="0.8">${escapeXml(stackLine)}</text>` +
+    (titleLine
+      ? `<rect x="${inset + 14}" y="142" width="${vbW - (inset + 14) * 2}" height="42" rx="6" fill="${PINK}" stroke="${INK}" stroke-width="4"/>` +
+        `<text x="${cx}" y="171" text-anchor="middle" font-family="${MONO}" font-size="${subSize}" font-weight="700" fill="${CREAM}">${escapeXml(titleLine)}</text>`
+      : "");
+
   return svgToDataUrl(
     svg(
       vbW,
       vbH,
-      `<rect x="6" y="6" width="${vbW - 12}" height="${vbH - 12}" rx="7" fill="${fill}" stroke="${INK}" stroke-width="8"/>` +
-        `<rect x="${inset + 6}" y="${inset + 6}" width="${vbW - (inset + 6) * 2}" height="${vbH - (inset + 6) * 2}" ` +
-        `rx="3" fill="none" stroke="${CREAM}" stroke-width="3.5"/>` +
-        `<text x="${vbW / 2}" y="${vbH / 2 + fontSize * 0.35}" text-anchor="middle" font-family="${MONO}" ` +
-        `font-size="${fontSize}" font-weight="700" fill="${ink}">${escapeXml(label)}</text>`
+      `<rect x="6" y="6" width="${vbW - 12}" height="${vbH - 12}" rx="8" fill="${fill}" stroke="${INK}" stroke-width="8"/>` +
+        `<rect x="${inset + 6}" y="${inset + 6}" width="${vbW - (inset + 6) * 2}" height="${vbH - (inset + 6) * 2}" rx="3" fill="none" stroke="${CREAM}" stroke-width="3"/>` +
+        lines
     )
   );
 }
