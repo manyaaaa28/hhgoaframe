@@ -80,32 +80,52 @@ export function makeBadgeBoard(name: string, stack: string, title: string, style
      the text shrinks to fit its half instead. */
   const vbW = 840;
   const vbH = 76;
-  const padX = 22;
-  const gap = 16;
   const divW = 3;
   const advance = 0.6; // Space Mono character width, as a share of font size
-  const minSize = 11;
   const width = (text: string, size: number) => text.length * size * advance;
 
   const nameText = name.trim().toUpperCase() || "YOUR NAME";
   let sub = [stack.trim().toUpperCase(), title.trim().toUpperCase()].filter(Boolean).join("  ·  ");
 
-  /* The divider used to sit at a fixed offset, which left a short name like
-     MANYA marooned beside a gap half the plate wide. Both halves are measured
-     instead, shrunk together only if they overflow, then centred as one block
-     — so the spacing follows the text while the plate stays the same size. */
-  const avail = vbW - padX * 2 - (sub ? gap * 2 + divW : 0);
-  let nameSize = 32;
-  let subSize = 20;
-  const overflow = (width(nameText, nameSize) + width(sub, subSize)) / avail;
-  if (overflow > 1) {
-    nameSize = Math.max(minSize, nameSize / overflow);
-    subSize = Math.max(minSize, subSize / overflow);
+  /* Name and role share one type size — set smaller than the name, the role
+     was unreadable once the plate sat on the frame.
+
+     Space is spent in a fixed order: comfortable padding first, then the
+     padding and the divider gaps tighten to their minimums, and only when
+     that runs out does the type shrink. Big text with snug margins beats
+     small text floating in white space.
+
+     The padding minimum is deliberately not tiny: squeezing it to nothing
+     left the text almost touching the border on the sides while the top and
+     bottom still had room, which reads as lopsided rather than tight. */
+  const PAD_MAX = 26;
+  const PAD_MIN = 16;
+  const GAP_MAX = 16;
+  const GAP_MIN = 7;
+  const maxSize = 34;
+  const minSize = 12;
+
+  const needed = (size: number, gap: number) =>
+    width(nameText, size) + (sub ? gap * 2 + divW : 0) + width(sub, size);
+
+  let size = maxSize;
+  let padX = PAD_MAX;
+  let gap = GAP_MAX;
+  if (needed(size, gap) > vbW - padX * 2) gap = GAP_MIN;
+  if (needed(size, gap) > vbW - padX * 2) padX = PAD_MIN;
+  if (needed(size, gap) > vbW - padX * 2) {
+    const avail = vbW - padX * 2 - (sub ? gap * 2 + divW : 0);
+    size = Math.max(minSize, avail / Math.max(nameText.length + sub.length, 1) / advance);
   }
+  const nameSize = size;
+  const subSize = size;
 
   const nameW = width(nameText, nameSize);
-  // Still over at the smallest readable size: trim the sub text, never the name.
-  const maxSubChars = Math.max(0, Math.floor((avail - nameW) / (subSize * advance)));
+  // Still over at the smallest readable size: trim the role, never the name.
+  const room = vbW - padX * 2 - nameW - (sub ? gap * 2 + divW : 0);
+  // 1px of slack: without it the rounding clipped a character off text that
+  // had just been sized to fit exactly.
+  const maxSubChars = Math.max(0, Math.floor((room + 1) / (subSize * advance)));
   if (sub.length > maxSubChars) sub = maxSubChars > 1 ? sub.slice(0, maxSubChars - 1) + "…" : "";
 
   const subW = width(sub, subSize);
