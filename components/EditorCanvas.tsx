@@ -613,7 +613,7 @@ export default function EditorCanvas({
             )}
           </Group>
         ))}
-        <StickerTransformer trRef={trRef} scale={scale} canvasWidth={CANVAS_W} />
+        <StickerTransformer trRef={trRef} />
       </Layer>
     </Stage>
   );
