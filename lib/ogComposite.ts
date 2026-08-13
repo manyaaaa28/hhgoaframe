@@ -44,5 +44,8 @@ export async function buildOgComposite(cardDataUrl: string): Promise<Blob | null
   // Nothing is set in the side gutters — the card art already carries the
   // wordmark and #FrameInGoa, and gutter copy clips at this card width.
 
-  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/png"));
+  /* JPEG, not PNG: this whole request has to fit inside Vercel's 4.5MB limit
+     for a server upload, and a PNG of this composite runs about 8x bigger for
+     a preview nobody inspects at full size. */
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9));
 }

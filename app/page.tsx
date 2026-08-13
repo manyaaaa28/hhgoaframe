@@ -8,7 +8,7 @@ import { layoutsForSize, LayoutTemplate, CANVAS_SIZE, HH_FRAME_W, HH_FRAME_H } f
 import { fileToImage } from "@/lib/loadImage";
 import { GOA_STICKERS, makeBadgeBoard, type BoardStyle } from "@/lib/goaStickers";
 import { generateBuilderTitle } from "@/lib/builderTitle";
-import { shareToX as shareImageToX } from "@/lib/share";
+import { shareToX as shareImageToX, type ShareResult } from "@/lib/share";
 import { cascadeDrop, STICKER_SIZE_RATIO } from "@/lib/stickerDrop";
 import CameraSheet from "@/components/CameraSheet";
 import CropSheet from "@/components/CropSheet";
@@ -60,7 +60,7 @@ export default function Page() {
   /** The auto-placed nameplate, tracked so edits update it instead of stacking copies. */
   const badgeIdRef = useRef<string | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [shareNote, setShareNote] = useState<string | null>(null);
+  const [share, setShare] = useState<ShareResult | null>(null);
   const [original, setOriginal] = useState<HTMLImageElement | null>(null);
   const [cropping, setCropping] = useState(false);
 
@@ -369,7 +369,7 @@ export default function Page() {
 
   async function shareToX() {
     setBusy(true);
-    setShareNote(null);
+    setShare(null);
     /* Name and title are required to reach this screen, so the caption always
        carries the badge's own details rather than a generic line. */
     const who = builderName.trim();
@@ -378,12 +378,12 @@ export default function Page() {
       `Locked in for HH Goa 2026 \u{1F334} #FrameInGoa`;
     // Runs synchronously up to its first await, so the intent window it opens
     // still counts as user-initiated and survives the popup blocker.
-    const problem = await shareImageToX({
+    const result = await shareImageToX({
       dataUrl: exportedUrl || exportImage(),
       filename: isHH ? "hacker-house-memories.png" : "hhgoa-2026-frame.png",
       caption,
     });
-    setShareNote(problem);
+    setShare(result);
     setBusy(false);
   }
 
@@ -673,7 +673,7 @@ export default function Page() {
           onDownload={download}
           onShare={shareToX}
           onBack={() => setStep(1)}
-          note={shareNote}
+          share={share}
         />
       )}
 
@@ -1061,14 +1061,14 @@ function StepShare({
   onDownload,
   onShare,
   onBack,
-  note,
+  share,
 }: {
   exportedUrl: string | null;
   busy: boolean;
   onDownload: () => void;
   onShare: () => void;
   onBack: () => void;
-  note: string | null;
+  share: ShareResult | null;
 }) {
   return (
     <div className="note-card" style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -1102,20 +1102,33 @@ function StepShare({
           {busy ? "Preparing…" : "𝕏 Share to X"}
         </button>
       </div>
-      {note && (
+      {share?.note && (
         /* Most notes are the next step, not a failure — only the ones that
-           start with "Couldn't" have gone wrong, so only those read as red. */
+           start with "Couldn't" or name a blocked pop-up have gone wrong. */
         <p
           className="mono"
           style={{
             fontSize: 12,
-            color: note.startsWith("Couldn't") ? "#a03820" : "var(--hh-green)",
+            color: /^(Couldn't|Your browser)/.test(share.note) ? "#a03820" : "var(--hh-green)",
             fontWeight: 600,
             marginTop: 12,
           }}
         >
-          {note}
+          {share.note}
         </p>
+      )}
+      {share?.composerUrl && (
+        /* A blocked pop-up is silent, so the composer is always one click away
+           from the page itself as well. */
+        <a
+          className="mono"
+          href={share.composerUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: "inline-block", fontSize: 12, marginTop: 8, color: "var(--hh-green)" }}
+        >
+          Open X composer →
+        </a>
       )}
       <button className="pill-btn ghost" onClick={onBack} style={{ marginTop: 14 }}>
         ← Edit again

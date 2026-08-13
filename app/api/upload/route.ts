@@ -17,11 +17,17 @@ export async function POST(req: NextRequest) {
     const ogFile = form.get("og") as File | null;
 
     const slug = nanoid(10);
-    const upload = async (name: string, source: File) =>
-      put(`cards/${name}.png`, Buffer.from(await source.arrayBuffer()), {
+    /* Follow whatever the client sent rather than forcing PNG — it uploads
+       JPEGs to stay inside Vercel's 4.5MB server-upload limit, and a JPEG
+       served as image/png fails to render in a link preview. */
+    const upload = async (name: string, source: File) => {
+      const type = source.type === "image/jpeg" ? "image/jpeg" : "image/png";
+      const ext = type === "image/jpeg" ? "jpg" : "png";
+      return put(`cards/${name}.${ext}`, Buffer.from(await source.arrayBuffer()), {
         access: "public",
-        contentType: "image/png",
+        contentType: type,
       });
+    };
 
     const blob = await upload(slug, file);
     const ogBlob = ogFile ? await upload(`${slug}-og`, ogFile) : null;
